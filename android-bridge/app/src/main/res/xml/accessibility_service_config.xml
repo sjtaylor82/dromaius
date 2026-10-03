@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- feedbackSpoken makes apps and WebViews treat us like a screen reader
+     (full semantics), without enabling touch exploration.
+     isAccessibilityTool: this service exists to give disabled users access, so
+     Android also exposes "accessibility data sensitive" views (e.g. sign-in
+     buttons), which it otherwise hides from services. -->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeAllMask"
+    android:accessibilityFeedbackType="feedbackSpoken"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagReportViewIds|flagRequestEnhancedWebAccessibility|flagIncludeNotImportantViews"
+    android:canPerformGestures="true"
+    android:isAccessibilityTool="true"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/service_description"
+    android:notificationTimeout="50" />

@@ -1,0 +1,117 @@
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #1b1b1b;
+  --muted: #5a5a5a;
+  --line: #d0d0d0;
+  --accent: #0b57d0;
+  --focus: #e37400;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e1e1e;
+    --fg: #f0f0f0;
+    --muted: #b5b5b5;
+    --line: #444444;
+    --accent: #8ab4f8;
+    --focus: #ffb74d;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.5 "Segoe UI", system-ui, sans-serif;
+}
+
+header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+header nav { display: flex; flex-wrap: wrap; gap: 8px; }
+#status { margin: 0; color: var(--muted); }
+
+main { padding: 16px; max-width: 760px; }
+
+h1 { font-size: 1.5rem; margin: 0 0 12px; }
+h2 { font-size: 1.15rem; margin: 16px 0 8px; }
+
+button {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 12px;
+  text-align: start;
+}
+
+button:hover { border-color: var(--accent); }
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+[aria-disabled="true"] { opacity: 0.55; }
+
+[role="switch"]::after,
+[role="checkbox"]::after,
+[role="radio"]::after {
+  margin-inline-start: 8px;
+  color: var(--muted);
+}
+[role="switch"][aria-checked="true"]::after { content: "On"; }
+[role="switch"][aria-checked="false"]::after { content: "Off"; }
+[role="checkbox"][aria-checked="true"]::after,
+[role="radio"][aria-checked="true"]::after { content: "\2713"; }
+
+#screen > *, #screen li > * { margin: 4px 0; }
+#screen ul, .apps { list-style: none; padding: 0; margin: 8px 0; }
+#screen li > button, .apps button { width: 100%; }
+#screen p { margin: 6px 0; }
+
+input, textarea {
+  font: inherit;
+  width: 100%;
+  padding: 6px 8px;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+button.scroll { color: var(--accent); }
+
+dialog {
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  max-width: 560px;
+  width: calc(100% - 32px);
+}
+
+dialog .buttons { display: flex; gap: 8px; margin-top: 12px; }
+dialog ul { list-style: none; padding: 0; }
+dialog li { margin: 4px 0; }
+dt { font-weight: 600; }
+dd { margin: 0 0 8px; }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

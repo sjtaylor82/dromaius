@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Dromaius Bridge</string>
+    <string name="service_label">Dromaius Bridge</string>
+    <string name="service_description">Mirrors the screen to the Dromaius desktop app so it can be used with a PC screen reader and keyboard.</string>
+</resources>

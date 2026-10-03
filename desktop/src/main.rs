@@ -1,0 +1,182 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod bridge;
+mod core;
+mod device;
+mod mirror;
+mod protocol;
+mod view;
+
+use std::path::PathBuf;
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex, OnceLock};
+
+use tauri::{Manager, State, WindowEvent};
+
+use crate::core::{BackendEvent, Core, InitPayload};
+use crate::view::parse_id;
+
+/// Set DROMAIUS_DEBUG=1 to save each Android snapshot to the temp folder.
+pub fn debug_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("DROMAIUS_DEBUG").is_some())
+}
+
+#[derive(Default)]
+pub struct Options {
+    /// Load a saved snapshot instead of starting Android (for testing).
+    pub mock: Option<PathBuf>,
+    /// Show the emulator's own window (useful for sighted helpers and debugging).
+    pub show_emulator: bool,
+    /// Shut the emulator down on exit instead of pausing it.
+    pub shutdown_on_exit: bool,
+    /// A Play Store link to open once connected.
+    pub install: Option<String>,
+    /// Don't set the emulator's GPS position from the PC's location.
+    pub no_location: bool,
+}
+
+const USAGE: &str = "Usage: dromaius [--mock FILE] [--show-emulator] [--shutdown-on-exit] [--no-location] [--install PLAY_LINK]";
+
+fn parse_args() -> Result<Options, String> {
+    let mut opts = Options::default();
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--mock" => opts.mock = Some(args.next().ok_or("--mock needs a file")?.into()),
+            "--show-emulator" => opts.show_emulator = true,
+            "--shutdown-on-exit" => opts.shutdown_on_exit = true,
+            "--no-location" => opts.no_location = true,
+            "--install" => opts.install = Some(args.next().ok_or("--install needs a link")?),
+            "-h" | "--help" => return Err(USAGE.into()),
+            // A bare Play link, e.g. when registered as a link handler.
+            other if other.contains("play.google.com") || other.starts_with("market://") => {
+                opts.install = Some(other.to_string())
+            }
+            other => return Err(format!("Unknown argument {other}\n{USAGE}")),
+        }
+    }
+    Ok(opts)
+}
+
+type Shared = Arc<Mutex<Core>>;
+
+fn with_node(id: &str, f: impl FnOnce(u64)) -> Result<(), String> {
+    f(parse_id(id).ok_or_else(|| format!("bad id {id}"))?);
+    Ok(())
+}
+
+#[tauri::command]
+fn init(core: State<Shared>) -> InitPayload {
+    core.lock().unwrap().init_payload()
+}
+
+#[tauri::command]
+fn act(core: State<Shared>, id: String, action: String) -> Result<(), String> {
+    with_node(&id, |id| core.lock().unwrap().act(id, &action))
+}
+
+#[tauri::command]
+fn set_text(
+    core: State<Shared>,
+    id: String,
+    text: String,
+    start: usize,
+    end: usize,
+) -> Result<(), String> {
+    with_node(&id, |id| {
+        core.lock().unwrap().set_text(id, &text, start, end)
+    })
+}
+
+#[tauri::command]
+fn set_progress(core: State<Shared>, id: String, value: f64) -> Result<(), String> {
+    with_node(&id, |id| core.lock().unwrap().set_progress(id, value))
+}
+
+#[tauri::command]
+fn custom_action(core: State<Shared>, id: String, action_id: i64) -> Result<(), String> {
+    with_node(&id, |id| core.lock().unwrap().custom_action(id, action_id))
+}
+
+#[tauri::command]
+fn scroll(core: State<Shared>, id: String, forward: bool) -> Result<(), String> {
+    with_node(&id, |id| core.lock().unwrap().scroll(id, forward))
+}
+
+#[tauri::command]
+fn global(core: State<Shared>, action: String) {
+    let allowed = ["back", "home", "recents", "notifications", "quickSettings"];
+    if allowed.contains(&action.as_str()) {
+        core.lock().unwrap().global(&action);
+    }
+}
+
+#[tauri::command]
+fn refresh(core: State<Shared>) {
+    core.lock().unwrap().refresh();
+}
+
+#[tauri::command]
+fn show_apps(core: State<Shared>) {
+    core.lock().unwrap().show_apps();
+}
+
+#[tauri::command]
+fn launch(core: State<Shared>, package: String) {
+    core.lock().unwrap().launch(&package);
+}
+
+#[tauri::command]
+fn install_link(core: State<Shared>, link: String) {
+    core.lock().unwrap().install_link(&link);
+}
+
+fn main() {
+    let opts = match parse_args() {
+        Ok(o) => o,
+        Err(msg) => {
+            eprintln!("{msg}");
+            std::process::exit(2);
+        }
+    };
+    let mut opts = Some(opts);
+
+    tauri::Builder::default()
+        .setup(move |app| {
+            let (tx, rx) = mpsc::channel::<BackendEvent>();
+            let core: Shared = Arc::new(Mutex::new(Core::new(
+                app.handle().clone(),
+                tx,
+                opts.take().unwrap_or_default(),
+            )));
+            app.manage(core.clone());
+            core.lock().unwrap().start();
+            std::thread::spawn(move || {
+                for ev in rx {
+                    core.lock().unwrap().handle(ev);
+                }
+            });
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { .. } = event {
+                window.state::<Shared>().lock().unwrap().on_exit();
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            init,
+            act,
+            set_text,
+            set_progress,
+            custom_action,
+            scroll,
+            global,
+            refresh,
+            show_apps,
+            launch,
+            install_link
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running Dromaius");
+}
