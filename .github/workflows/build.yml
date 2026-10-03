@@ -1,0 +1,64 @@
+# Builds the macOS app (universal: Apple Silicon + Intel).
+#
+# Run it from the Actions tab ("Run workflow") to get a test build as a
+# downloadable artifact. Pushing a version tag (v*) also attaches the build to
+# that tag's GitHub release.
+#
+# The signed Android bridge is taken from the latest GitHub release, so the
+# signing key never has to be stored on GitHub.
+
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust targets
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+      - name: Rust tests
+        working-directory: desktop
+        run: cargo test
+
+      - name: Page tests
+        working-directory: desktop/ui-tests
+        run: npm ci && npm test
+
+      - name: Build the universal app
+        working-directory: desktop
+        run: npx --yes @tauri-apps/cli@2 build --target universal-apple-darwin --bundles app
+
+      - name: Add the bridge and package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APP=desktop/target/universal-apple-darwin/release/bundle/macos/Dromaius.app
+          gh release download --repo "${{ github.repository }}" --pattern dromaius-bridge.apk --dir "$APP/Contents/Resources"
+          # Adding a file invalidates the bundle's ad-hoc signature; sign again.
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep --strict "$APP"
+          VERSION=$(node -p "require('./desktop/tauri.conf.json').version")
+          mkdir -p "out/Dromaius" && cp -R "$APP" out/Dromaius/ && cp dist/README-mac.txt out/Dromaius/README.txt
+          (cd out && ditto -c -k --keepParent Dromaius "Dromaius-$VERSION-macos-universal.zip")
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dromaius-macos
+          path: out/*.zip
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" out/*.zip --clobber --repo "${{ github.repository }}"

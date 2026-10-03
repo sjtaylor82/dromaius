@@ -227,7 +227,7 @@ function setRoleAttrs(el, wanted) {
 function updateNode(el, d) {
   el._desc = d;
   const hints = [];
-  if (d.longClickable && !d.clickable) hints.push('More actions with Shift+F10');
+  if (d.longClickable && !d.clickable) hints.push(`More actions with ${IS_MAC ? 'VoiceOver+Shift+M' : 'Shift+F10'}`);
   const description = [d.description, d.error && `Error: ${d.error}`, ...hints].filter(Boolean).join('. ');
   setAttr(el, 'aria-description', description || null);
   setAttr(el, 'aria-roledescription', d.roleDescription || null);
@@ -545,29 +545,81 @@ document.addEventListener('contextmenu', (e) => {
   if (!e.target.closest('input, textarea')) e.preventDefault();
 });
 
+// Keyboard shortcuts. macOS gets Mac conventions: Option+arrows move by word
+// in text fields there, and many Mac keyboards have no F-keys or Home.
+const IS_MAC = /Mac/.test(navigator.platform || navigator.userAgent);
+
+const SHORTCUTS = [
+  {
+    id: 'apps', what: 'Show your apps', run: () => showApps(),
+    win: ['Alt+Home', (e) => e.altKey && e.key === 'Home'],
+    mac: ['Cmd+Shift+H', (e) => e.metaKey && e.shiftKey && e.key.toLowerCase() === 'h'],
+  },
+  {
+    id: 'back', what: 'Android Back', run: () => invoke('global', { action: 'back' }),
+    win: ['Alt+Left', (e) => e.altKey && e.key === 'ArrowLeft'],
+    mac: ['Cmd+[', (e) => e.metaKey && e.key === '['],
+  },
+  {
+    id: 'notifications', what: 'Android notifications (new ones are also announced as they arrive)',
+    run: () => invoke('global', { action: 'notifications' }),
+    win: ['Alt+N', (e) => e.altKey && e.key.toLowerCase() === 'n'],
+    mac: ['Cmd+Shift+N', (e) => e.metaKey && e.shiftKey && e.key.toLowerCase() === 'n'],
+  },
+  {
+    id: 'install', what: 'Find an app on Google Play: type its name, or paste a link', run: () => openInstall(),
+    win: ['Ctrl+L', (e) => e.ctrlKey && e.key.toLowerCase() === 'l'],
+    mac: ['Cmd+L', (e) => e.metaKey && e.key.toLowerCase() === 'l'],
+  },
+  {
+    id: 'refresh', what: 'Refresh the screen', run: () => { invoke('refresh'); announce('Refreshing'); },
+    win: ['F5', (e) => e.key === 'F5' || (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'r')],
+    mac: ['Cmd+R', (e) => e.metaKey && !e.shiftKey && e.key.toLowerCase() === 'r'],
+  },
+  {
+    id: 'help', what: 'Keyboard help', run: () => $('help-dialog').showModal(),
+    win: ['F1', (e) => e.key === 'F1'],
+    mac: ['Cmd+?', (e) => e.metaKey && (e.key === '?' || (e.shiftKey && e.key === '/'))],
+  },
+];
+
+/** Shortcuts handled by the screen reader or browser rather than by us. */
+const OTHER_KEYS = IS_MAC
+  ? [['VoiceOver+Shift+M', 'More actions for the current item, such as long press'],
+    ['Return in an edit field', 'Submit, for example run a search']]
+  : [['Shift+F10 or the Applications key', 'More actions for the current item, such as long press'],
+    ['Enter on an edit field', 'Submit, for example run a search']];
+
+function shortcutLabel(id) {
+  const s = SHORTCUTS.find((x) => x.id === id);
+  return s ? (IS_MAC ? s.mac : s.win)[0] : '';
+}
+
 document.addEventListener('keydown', (e) => {
-  const key = e.key.toLowerCase();
-  if (e.key === 'F5' || (e.ctrlKey && !e.shiftKey && key === 'r')) {
-    e.preventDefault();
-    invoke('refresh');
-    announce('Refreshing');
-  } else if (e.altKey && e.key === 'Home') {
-    e.preventDefault();
-    showApps();
-  } else if (e.altKey && e.key === 'ArrowLeft') {
-    e.preventDefault();
-    invoke('global', { action: 'back' });
-  } else if (e.ctrlKey && key === 'l') {
-    e.preventDefault();
-    openInstall();
-  } else if (e.altKey && key === 'n') {
-    e.preventDefault();
-    invoke('global', { action: 'notifications' });
-  } else if (e.key === 'F1') {
-    e.preventDefault();
-    $('help-dialog').showModal();
+  for (const s of SHORTCUTS) {
+    if ((IS_MAC ? s.mac : s.win)[1](e)) {
+      e.preventDefault();
+      s.run();
+      return;
+    }
   }
 }, true);
+
+function renderShortcuts() {
+  const rows = [...SHORTCUTS.map((s) => [shortcutLabel(s.id), s.what]), ...OTHER_KEYS];
+  $('shortcut-list').replaceChildren(...rows.flatMap(([keys, what]) => {
+    const dt = document.createElement('dt');
+    dt.textContent = keys;
+    const dd = document.createElement('dd');
+    dd.textContent = what;
+    return [dt, dd];
+  }));
+  for (const [button, id] of [['btn-apps', 'apps'], ['btn-back', 'back'], ['btn-notifications', 'notifications'],
+    ['btn-install', 'install'], ['btn-help', 'help']]) {
+    $(button).title = shortcutLabel(id);
+  }
+}
+renderShortcuts();
 
 $('btn-apps').addEventListener('click', showApps);
 $('btn-back').addEventListener('click', () => invoke('global', { action: 'back' }));

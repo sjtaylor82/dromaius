@@ -10,7 +10,7 @@ import { JSDOM } from 'jsdom';
 
 const ui = path.resolve(import.meta.dirname, '../ui');
 
-async function load() {
+async function load({ mac = false } = {}) {
   const html = fs.readFileSync(path.join(ui, 'index.html'), 'utf8').replace(/<script[^>]*><\/script>/, '');
   const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true });
   const w = dom.window;
@@ -35,6 +35,7 @@ async function load() {
     if (value !== undefined) this.returnValue = value;
     this.dispatchEvent(new w.Event('close'));
   };
+  if (mac) Object.defineProperty(w.navigator, 'platform', { value: 'MacIntel' });
   w.eval(fs.readFileSync(path.join(ui, 'app.js'), 'utf8'));
   await new Promise((r) => setTimeout(r, 20));
   const screen = (nodes, extra = {}) => handlers.screen({ payload: { title: 'Test', package: 'test', nodes, ...extra } });
@@ -199,4 +200,29 @@ test('an item that stops being long-pressable leaves the Tab order', async () =>
   screen([{ id: 'p', kind: 'text', label: 'Photo' }], { focus: 'p' });
   screen([{ id: 'p', kind: 'text', label: 'Photo' }]);
   assert.equal(item.getAttribute('tabindex'), '-1');
+});
+
+function press(w, init) {
+  const e = new w.KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
+  w.document.body.dispatchEvent(e);
+  return e.defaultPrevented;
+}
+
+test('Windows shortcuts', async () => {
+  const { w, doc, calls } = await load();
+  assert.equal(press(w, { key: 'ArrowLeft', altKey: true }), true);
+  assert.deepEqual(calls.at(-1), ['global', { action: 'back' }]);
+  assert.equal(doc.getElementById('btn-back').title, 'Alt+Left');
+  assert.match(doc.getElementById('shortcut-list').textContent, /Ctrl\+L/);
+});
+
+test('Mac shortcuts follow Mac conventions and leave Option+arrows alone', async () => {
+  const { w, doc, calls } = await load({ mac: true });
+  assert.equal(press(w, { key: '[', metaKey: true }), true);
+  assert.deepEqual(calls.at(-1), ['global', { action: 'back' }]);
+  const before = calls.length;
+  assert.equal(press(w, { key: 'ArrowLeft', altKey: true }), false, 'Option+Left still moves by word');
+  assert.equal(calls.length, before);
+  assert.equal(doc.getElementById('btn-install').title, 'Cmd+L');
+  assert.match(doc.getElementById('shortcut-list').textContent, /VoiceOver\+Shift\+M/);
 });
