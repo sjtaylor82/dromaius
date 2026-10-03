@@ -577,6 +577,8 @@ function renderSetup(setup) {
   const progress = $('setup-progress');
   license.hidden = setup.stage !== 'license';
   progress.hidden = !['downloading', 'unpacking', 'checking'].includes(setup.stage);
+  // Only show a bar while something is actually downloading.
+  $('setup-bar').hidden = setup.stage !== 'downloading';
   const message = $('starting-message');
 
   switch (setup.stage) {
