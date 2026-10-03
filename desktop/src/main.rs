@@ -5,6 +5,7 @@ mod core;
 mod device;
 mod mirror;
 mod protocol;
+mod setup;
 mod view;
 
 use std::path::PathBuf;
@@ -113,6 +114,11 @@ fn global(core: State<Shared>, action: String) {
 }
 
 #[tauri::command]
+fn answer_license(core: State<Shared>, accepted: bool) {
+    core.lock().unwrap().answer_license(accepted);
+}
+
+#[tauri::command]
 fn refresh(core: State<Shared>) {
     core.lock().unwrap().refresh();
 }
@@ -175,7 +181,8 @@ fn main() {
             refresh,
             show_apps,
             launch,
-            install_link
+            install_link,
+            answer_license
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dromaius");

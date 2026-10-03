@@ -469,6 +469,78 @@ $('btn-back').addEventListener('click', () => invoke('global', { action: 'back' 
 $('btn-install').addEventListener('click', openInstall);
 $('btn-help').addEventListener('click', () => $('help-dialog').showModal());
 
+// ------------------------------------------------------------------ first-run setup
+
+let lastDecile = -1;
+
+function renderSetup(setup) {
+  const license = $('setup-license');
+  const progress = $('setup-progress');
+  license.hidden = setup.stage !== 'license';
+  progress.hidden = !['downloading', 'unpacking', 'checking'].includes(setup.stage);
+  const message = $('starting-message');
+
+  switch (setup.stage) {
+    case 'checking':
+      setText(message, 'Checking what needs to be installed');
+      setText($('setup-detail'), '');
+      break;
+    case 'license': {
+      const gb = (setup.downloadMb / 1000).toFixed(1);
+      setText(message, 'Android needs to be installed before first use.');
+      setText($('license-intro'),
+        `Dromaius will download Android from Google: about ${gb} GB, which needs about ${Math.ceil(gb * 2.5)} GB of free disk space. ` +
+        'Google requires you to accept its licence first. The licence text follows, then Accept and Decline buttons.');
+      if (!$('license-text').textContent) {
+        $('license-text').replaceChildren(...setup.text.split(/\n\s*\n/).map((para) => {
+          const p = document.createElement('p');
+          p.textContent = para.replace(/\s+/g, ' ').trim();
+          return p;
+        }));
+      }
+      license.querySelector('h2').tabIndex = -1;
+      license.querySelector('h2').focus();
+      break;
+    }
+    case 'downloading': {
+      setText(message, 'Installing Android');
+      $('setup-bar').value = setup.percent;
+      setText($('setup-detail'), `Downloading ${setup.label}: ${setup.percent}% (${setup.doneMb} of ${setup.totalMb} MB)`);
+      const decile = Math.floor(setup.percent / 10);
+      if (decile !== lastDecile) {
+        lastDecile = decile;
+        announce(`Downloading Android, ${setup.percent} percent`);
+      }
+      break;
+    }
+    case 'unpacking':
+      setText(message, 'Installing Android');
+      setText($('setup-detail'), `Unpacking ${setup.label}`);
+      announce(`Unpacking ${setup.label}`);
+      break;
+    case 'virtualization':
+    case 'failed':
+      setText(message, setup.message);
+      announce(setup.message);
+      currentHeading()?.focus();
+      break;
+    case 'done':
+      setText($('setup-detail'), '');
+      announce('Android is installed. Starting it for the first time, this takes about a minute.');
+      break;
+  }
+}
+
+$('license-accept').addEventListener('click', () => {
+  invoke('answer_license', { accepted: true });
+  $('setup-license').hidden = true;
+  announce('Starting download');
+});
+$('license-decline').addEventListener('click', () => {
+  invoke('answer_license', { accepted: false });
+  $('setup-license').hidden = true;
+});
+
 function applyState(state) {
   setText($('status'), state.status);
   setText($('starting-message'), state.status);
@@ -481,7 +553,9 @@ async function start() {
   await listen('announce', (e) => announce(e.payload));
   await listen('apps', (e) => renderApps(e.payload));
   await listen('screen', (e) => renderScreen(e.payload));
+  await listen('setup', (e) => renderSetup(e.payload));
   const init = await tauri.core.invoke('init');
+  if (init.setup) renderSetup(init.setup);
   renderApps(init.apps);
   if (init.screen) lastScreen = init.screen;
   applyState(init.state);

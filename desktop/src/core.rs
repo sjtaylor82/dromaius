@@ -16,6 +16,12 @@ use crate::protocol::{AppInfo, FromBridge, Snapshot, ToBridge};
 use crate::view::{self, ViewNode};
 
 pub enum BackendEvent {
+    Setup(SetupPayload),
+    LicenseRequest {
+        text: String,
+        download_bytes: u64,
+        reply: Sender<bool>,
+    },
     Bridge(FromBridge),
     BridgeDisconnected,
     Status(String),
@@ -54,8 +60,38 @@ pub struct ScreenPayload {
     pub focus: Option<String>,
 }
 
+/// First-run setup, as shown in the starting view.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "stage", rename_all = "camelCase")]
+pub enum SetupPayload {
+    Checking,
+    #[serde(rename_all = "camelCase")]
+    License {
+        text: String,
+        download_mb: u64,
+    },
+    #[serde(rename_all = "camelCase")]
+    Downloading {
+        label: String,
+        percent: u8,
+        done_mb: u64,
+        total_mb: u64,
+    },
+    Unpacking {
+        label: String,
+    },
+    Virtualization {
+        message: String,
+    },
+    Failed {
+        message: String,
+    },
+    Done,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct InitPayload {
+    pub setup: Option<SetupPayload>,
     pub state: StatePayload,
     pub apps: Vec<AppInfo>,
     pub screen: Option<ScreenPayload>,
@@ -88,6 +124,8 @@ pub struct Core {
     install_watch: Option<(String, Instant)>,
     pending_more: Option<PendingMore>,
     last_screen: Option<ScreenPayload>,
+    setup: Option<SetupPayload>,
+    license_reply: Option<Sender<bool>>,
 }
 
 impl Core {
@@ -110,6 +148,8 @@ impl Core {
             install_watch: None,
             pending_more: None,
             last_screen: None,
+            setup: None,
+            license_reply: None,
         }
     }
 
@@ -136,13 +176,21 @@ impl Core {
             let status = |s: &str| {
                 let _ = events.send(BackendEvent::Status(s.to_string()));
             };
-            let result = device::start(
-                &device::StartOptions {
-                    show_emulator: show,
-                },
-                &status,
-            )
-            .and_then(|d| device::ensure_bridge(&d, &status).map(|_| d));
+            let sdk = match device::find_sdk() {
+                Some(sdk) => Ok(sdk),
+                None => run_setup(&events),
+            };
+            let result = sdk
+                .and_then(|sdk| {
+                    device::start(
+                        sdk,
+                        &device::StartOptions {
+                            show_emulator: show,
+                        },
+                        &status,
+                    )
+                })
+                .and_then(|d| device::ensure_bridge(&d, &status).map(|_| d));
             // Give apps the PC's position: the emulator's default GPS fix is
             // an arbitrary spot in California.
             if let (Ok(d), true) = (&result, set_location) {
@@ -160,6 +208,7 @@ impl Core {
 
     pub fn init_payload(&self) -> InitPayload {
         InitPayload {
+            setup: self.setup.clone(),
             state: self.state(),
             apps: self.apps.clone(),
             screen: self.last_screen.clone(),
@@ -211,6 +260,23 @@ impl Core {
 
     pub fn handle(&mut self, ev: BackendEvent) {
         match ev {
+            BackendEvent::Setup(payload) => {
+                let _ = self.app.emit("setup", &payload);
+                self.setup = Some(payload);
+            }
+            BackendEvent::LicenseRequest {
+                text,
+                download_bytes,
+                reply,
+            } => {
+                self.license_reply = Some(reply);
+                let payload = SetupPayload::License {
+                    text,
+                    download_mb: download_bytes / 1_000_000,
+                };
+                let _ = self.app.emit("setup", &payload);
+                self.setup = Some(payload);
+            }
             BackendEvent::Status(s) => self.set_status(&s),
             BackendEvent::DeviceReady(d) => {
                 self.device = Some(d);
@@ -538,6 +604,13 @@ impl Core {
         });
     }
 
+    /// The user's answer to Google's licence during first-run setup.
+    pub fn answer_license(&mut self, accepted: bool) {
+        if let Some(reply) = self.license_reply.take() {
+            let _ = reply.send(accepted);
+        }
+    }
+
     /// Called when the window closes: pause (or shut down) the emulator.
     pub fn on_exit(&self) {
         if let Some(d) = &self.device {
@@ -551,4 +624,76 @@ impl Core {
             }
         }
     }
+}
+
+/// Downloads Android into Dromaius's own folder. Runs on the startup thread.
+fn run_setup(events: &Sender<BackendEvent>) -> anyhow::Result<std::path::PathBuf> {
+    use crate::setup;
+
+    let send = |p: SetupPayload| {
+        let _ = events.send(BackendEvent::Setup(p));
+    };
+    let fail = |message: String| {
+        send(SetupPayload::Failed {
+            message: message.clone(),
+        });
+        anyhow::anyhow!(message)
+    };
+    send(SetupPayload::Checking);
+    let sdk = setup::own_sdk_dir();
+    let plan = setup::plan(&sdk)
+        .map_err(|e| fail(format!("Could not reach Google's download server: {e:#}")))?;
+
+    let (reply, answer) = std::sync::mpsc::channel();
+    let _ = events.send(BackendEvent::LicenseRequest {
+        text: plan.license_text.clone(),
+        download_bytes: plan.total_bytes(),
+        reply,
+    });
+    if !answer.recv().unwrap_or(false) {
+        return Err(fail(
+            "Android can't be installed without accepting Google's licence. Close and reopen Dromaius to see it again.".into(),
+        ));
+    }
+    setup::record_license(&sdk, &plan)?;
+
+    let total = plan.total_bytes().max(1);
+    let mut before = 0;
+    for d in &plan.downloads {
+        // Check virtualization before the big system image download.
+        if d.dest.starts_with(sdk.join("system-images"))
+            && let Err(detail) = setup::check_acceleration(&sdk)
+        {
+            send(SetupPayload::Virtualization {
+                message: virtualization_help(&detail),
+            });
+            anyhow::bail!("virtualization is not available: {detail}");
+        }
+        setup::install(&sdk, d, before, total, &|p| {
+            send(match p {
+                setup::Progress::Downloading { label, done, total } => SetupPayload::Downloading {
+                    label: label.into(),
+                    percent: (done * 100 / total.max(1)).min(100) as u8,
+                    done_mb: done / 1_000_000,
+                    total_mb: total / 1_000_000,
+                },
+                setup::Progress::Unpacking { label } => SetupPayload::Unpacking {
+                    label: label.into(),
+                },
+            })
+        })
+        .map_err(|e| fail(format!("{e:#}")))?;
+        before += d.size;
+    }
+    send(SetupPayload::Done);
+    Ok(sdk)
+}
+
+fn virtualization_help(detail: &str) -> String {
+    let fix = if cfg!(windows) {
+        "Android needs hardware virtualization. To turn it on: press Windows+R, type optionalfeatures and press Enter, check \"Windows Hypervisor Platform\", press OK, and restart your PC. If it still doesn't work, virtualization (Intel VT-x or AMD-V) may be turned off in your PC's BIOS or UEFI settings."
+    } else {
+        "Android needs hardware virtualization, which this computer doesn't seem to provide."
+    };
+    format!("{fix} Then open Dromaius again. (Emulator said: {detail})")
 }

@@ -59,8 +59,11 @@ location), `--mock <snapshot.json>` (render a saved screen without Android).
 - Windows 10/11 64-bit with hardware virtualization and the **Windows Hypervisor
   Platform** feature enabled (macOS support is planned)
 - 8 GB RAM (16 GB recommended), about 10 GB free disk space
-- The Android SDK emulator and a Google Play system image (an installer that
-  downloads these is still to do; for now see developer setup)
+- An internet connection for the first start. Dromaius then downloads Android
+  from Google (about 2.8 GB; 4 GB on disk) into `%LOCALAPPDATA%\Dromaius\sdk`,
+  after you accept Google's licence. No Java or developer tools are needed.
+  If an Android SDK with an emulator and Google Play image is already
+  installed, Dromaius uses that instead.
 
 ## Developer setup (Windows)
 
@@ -99,6 +102,8 @@ must ship next to the `.exe`; it is copied to `target/` by the build.
 
 ### Debugging
 
+- `DROMAIUS_SDK_DIR` and `ANDROID_AVD_HOME` point Dromaius at other folders,
+  e.g. empty ones to test first-run setup without touching your real setup.
 - `DROMAIUS_DEBUG=1` saves every Android snapshot to
   `%TEMP%\dromaius-snapshot.json` (usable with `--mock`).
 - `tools/uia-dump.ps1` prints what a screen reader sees through UI Automation,

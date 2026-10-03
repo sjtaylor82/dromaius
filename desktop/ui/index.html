@@ -22,6 +22,22 @@
     <section id="starting-view">
       <h1 tabindex="-1">Dromaius</h1>
       <p id="starting-message">Starting Android. This takes about a minute the first time and a few seconds after that.</p>
+
+      <div id="setup-license" hidden>
+        <h2>Install Android</h2>
+        <p id="license-intro"></p>
+        <h3>Google's Android SDK licence</h3>
+        <div id="license-text" class="license"></div>
+        <div class="buttons">
+          <button type="button" id="license-accept">Accept and download</button>
+          <button type="button" id="license-decline">Decline</button>
+        </div>
+      </div>
+
+      <div id="setup-progress" hidden>
+        <progress id="setup-bar" max="100" value="0" aria-labelledby="setup-detail"></progress>
+        <p id="setup-detail"></p>
+      </div>
     </section>
 
     <section id="apps-view" hidden>

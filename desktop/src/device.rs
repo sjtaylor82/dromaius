@@ -36,7 +36,7 @@ const EXE: &str = ".exe";
 #[cfg(not(windows))]
 const EXE: &str = "";
 
-fn quiet(cmd: &mut Command) -> &mut Command {
+pub(crate) fn quiet(cmd: &mut Command) -> &mut Command {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -46,7 +46,14 @@ fn quiet(cmd: &mut Command) -> &mut Command {
     cmd
 }
 
-pub fn find_sdk() -> Result<PathBuf> {
+/// A complete Android SDK (tools, emulator and a Google Play image): a
+/// developer's existing SDK if there is one, otherwise Dromaius's own copy.
+/// None means first-run setup is needed.
+pub fn find_sdk() -> Option<PathBuf> {
+    if std::env::var_os("DROMAIUS_SDK_DIR").is_some() {
+        let own = crate::setup::own_sdk_dir();
+        return crate::setup::is_complete(&own).then_some(own);
+    }
     let mut candidates: Vec<PathBuf> = ["ANDROID_HOME", "ANDROID_SDK_ROOT"]
         .iter()
         .filter_map(|v| std::env::var_os(v).map(PathBuf::from))
@@ -58,10 +65,10 @@ pub fn find_sdk() -> Result<PathBuf> {
         candidates.push(home.join("Library/Android/sdk"));
         candidates.push(home.join("Android/Sdk"));
     }
+    candidates.push(crate::setup::own_sdk_dir());
     candidates
         .into_iter()
-        .find(|p| p.join("platform-tools").join(format!("adb{EXE}")).exists())
-        .ok_or_else(|| anyhow!("Android SDK not found. Set ANDROID_HOME to the SDK folder."))
+        .find(|p| crate::setup::is_complete(p))
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -110,40 +117,9 @@ pub fn adb(sdk: &Path, serial: Option<&str>, args: &[&str]) -> Result<String> {
 
 /// Newest installed Google Play system image for this machine's CPU.
 fn newest_play_image(sdk: &Path) -> Result<(String, String)> {
-    let abi = if cfg!(target_arch = "aarch64") {
-        "arm64-v8a"
-    } else {
-        "x86_64"
-    };
-    let mut best: Option<(Vec<u32>, String)> = None;
-    for entry in
-        std::fs::read_dir(sdk.join("system-images")).context("no system images installed")?
-    {
-        let name = entry?.file_name().to_string_lossy().to_string();
-        let Some(ver) = name.strip_prefix("android-") else {
-            continue;
-        };
-        let Ok(nums) = ver
-            .split('.')
-            .map(str::parse::<u32>)
-            .collect::<Result<Vec<_>, _>>()
-        else {
-            continue;
-        };
-        if sdk
-            .join("system-images")
-            .join(&name)
-            .join("google_apis_playstore")
-            .join(abi)
-            .exists()
-            && best.as_ref().is_none_or(|(b, _)| nums > *b)
-        {
-            best = Some((nums, name));
-        }
-    }
-    let (_, platform) =
-        best.ok_or_else(|| anyhow!("No Google Play system image installed for {abi}"))?;
-    Ok((platform, abi.to_string()))
+    let platform = crate::setup::installed_image(sdk)
+        .ok_or_else(|| anyhow!("No Google Play system image installed"))?;
+    Ok((platform, crate::setup::image_abi().to_string()))
 }
 
 /// Writes the AVD definition directly (what avdmanager would do), so no JDK is needed.
@@ -214,8 +190,7 @@ fn device_state(sdk: &Path, serial: &str) -> Option<String> {
 }
 
 /// Starts the emulator (Quick Boot) or resumes it if we paused it earlier.
-pub fn start(opts: &StartOptions, status: &dyn Fn(&str)) -> Result<Device> {
-    let sdk = find_sdk()?;
+pub fn start(sdk: PathBuf, opts: &StartOptions, status: &dyn Fn(&str)) -> Result<Device> {
     let serial = format!("emulator-{EMULATOR_PORT}");
     adb(&sdk, None, &["start-server"])?;
 
