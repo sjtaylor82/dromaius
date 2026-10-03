@@ -51,6 +51,8 @@ jobs:
           codesign --verify --deep --strict "$APP"
           VERSION=$(node -p "require('./desktop/tauri.conf.json').version")
           mkdir -p "out/Dromaius" && cp -R "$APP" out/Dromaius/ && cp dist/README-mac.txt out/Dromaius/README.txt
+          cp dist/install-macos.sh dist/collect-macos-logs.sh out/Dromaius/
+          chmod +x out/Dromaius/*.sh
           (cd out && ditto -c -k --keepParent Dromaius "Dromaius-$VERSION-macos-universal.zip")
           ls -la out
 

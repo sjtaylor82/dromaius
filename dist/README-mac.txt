@@ -8,8 +8,9 @@ links, form controls, and VO+A to read all). Typing goes into normal edit
 fields.
 
 The Mac version is new and has had little testing. Please report problems at
-https://github.com/sjtaylor82/dromaius/issues and include
-~/Library/Application Support/Dromaius/startup.log if starting is slow.
+https://github.com/sjtaylor82/dromaius/issues. To include diagnostics, run
+this in Terminal from the Dromaius folder and attach the file it creates:
+  bash collect-macos-logs.sh
 
 
 WHAT YOU NEED
@@ -24,14 +25,22 @@ WHAT YOU NEED
 
 INSTALLING
 
-1. Unzip the download and move Dromaius.app to your Applications folder.
-2. The first time, macOS will refuse to open it, because Dromaius isn't
-   registered with Apple. To open it anyway:
-   - In Finder, select Dromaius.app, press VO+Shift+M (or Control-click) to
-     open its menu, choose Open, then Open again in the warning.
-   - Or: System Settings, Privacy & Security, scroll to "Dromaius was blocked",
-     and choose Open Anyway.
-   You only need to do this once.
+1. Unzip the download. You get a Dromaius folder containing Dromaius.app,
+   install-macos.sh, collect-macos-logs.sh and this README.
+2. Install with the included script (easiest). In Terminal (Cmd+Space,
+   type Terminal, Return), type these two commands, pressing Return after
+   each, adjusting the folder if you unzipped somewhere else:
+     cd ~/Downloads/Dromaius
+     bash install-macos.sh
+   The script removes the "downloaded from the internet" flag that would
+   otherwise stop macOS opening Dromaius, copies Dromaius.app to your
+   Applications folder (replacing an older copy) and opens it.
+
+   Without the script: move Dromaius.app to Applications yourself. The
+   first time, macOS refuses to open it because Dromaius isn't registered
+   with Apple. In Finder, select Dromaius.app, press VO+Shift+M (or
+   Control-click), choose Open, then Open again in the warning. Or use
+   System Settings, Privacy & Security, "Dromaius was blocked", Open Anyway.
 3. Dromaius offers to download Android from Google. It tells you which
    Android version and how much it downloads. Read Google's licence, then
    choose "Accept and download". Progress is announced every 10 percent.
