@@ -339,6 +339,8 @@ pub fn start(sdk: PathBuf, opts: &StartOptions, status: &dyn Fn(&str)) -> Result
     let serial = format!("emulator-{EMULATOR_PORT}");
     adb(&sdk, None, &["start-server"])?;
 
+    let mut emulator = None;
+    let timeout = opts.boot_timeout;
     if device_state(&sdk, &serial).as_deref() == Some("device") {
         status("Resuming Android");
         crate::timing::mark("emulator was paused or running: resuming");
@@ -365,21 +367,29 @@ pub fn start(sdk: PathBuf, opts: &StartOptions, status: &dyn Fn(&str)) -> Result
         if opts.wipe_data {
             cmd.arg("-wipe-data");
         }
-        quiet(&mut cmd)
+        // Keep the emulator's own messages: they explain boot failures.
+        let log = std::fs::File::create(emulator_log_path()).context("creating emulator.log")?;
+        let child = quiet(&mut cmd)
             .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(log.try_clone()?)
+            .stderr(log)
             .spawn()
             .context("starting the emulator")?;
+        emulator = Some(child);
     }
 
     let device = Device { sdk, serial };
-    wait_for_boot(&device, opts.boot_timeout, status)?;
+    wait_for_boot(&device, timeout, status, emulator.as_mut())?;
     crate::timing::mark("Android boot completed");
     Ok(device)
 }
 
-fn wait_for_boot(d: &Device, timeout: Duration, status: &dyn Fn(&str)) -> Result<()> {
+fn wait_for_boot(
+    d: &Device,
+    timeout: Duration,
+    status: &dyn Fn(&str),
+    mut emulator: Option<&mut std::process::Child>,
+) -> Result<()> {
     let started = Instant::now();
     let mut announced = false;
     loop {
@@ -396,10 +406,20 @@ fn wait_for_boot(d: &Device, timeout: Duration, status: &dyn Fn(&str)) -> Result
             status("Android is still starting, please wait");
             announced = true;
         }
+        // Fail at once, with its explanation, if the emulator gave up.
+        if let Some(child) = emulator.as_deref_mut()
+            && let Ok(Some(exit)) = child.try_wait()
+        {
+            bail!(
+                "the Android emulator stopped while starting ({exit}).{}",
+                emulator_log_tail()
+            );
+        }
         if started.elapsed() > timeout {
             bail!(
-                "Android did not finish starting within {} minutes",
-                timeout.as_secs() / 60
+                "Android did not finish starting within {} minutes.{}",
+                timeout.as_secs() / 60,
+                emulator_log_tail()
             );
         }
         std::thread::sleep(Duration::from_millis(500));
@@ -412,6 +432,25 @@ const EMBEDDED_BRIDGE: Option<&[u8]> =
     Some(include_bytes!(concat!(env!("OUT_DIR"), "/bridge.apk")));
 #[cfg(not(embedded_bridge))]
 const EMBEDDED_BRIDGE: Option<&[u8]> = None;
+
+/// The emulator's output from the last time Dromaius started it.
+pub fn emulator_log_path() -> PathBuf {
+    crate::timing::log_path().with_file_name("emulator.log")
+}
+
+/// The last lines of emulator.log, for error messages.
+fn emulator_log_tail() -> String {
+    let text = std::fs::read_to_string(emulator_log_path()).unwrap_or_default();
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    let tail = lines[lines.len().saturating_sub(6)..].join("\n");
+    format!(
+        " The emulator said:\n{tail}\n(Full log: {})",
+        emulator_log_path().display()
+    )
+}
 
 /// Finds the bridge APK: a path from DROMAIUS_BRIDGE_APK, the copy built into
 /// the executable, or (for development builds without one) a file next to the
@@ -466,7 +505,7 @@ pub fn ensure_bridge(d: &Device, status: &dyn Fn(&str)) -> Result<()> {
                 attempt += 1;
                 status("Android is restarting, waiting for it");
                 std::thread::sleep(Duration::from_secs(3));
-                wait_for_boot(d, Duration::from_secs(300), status)?;
+                wait_for_boot(d, Duration::from_secs(300), status, None)?;
             }
             Err(e) => return Err(e),
         }

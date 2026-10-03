@@ -61,6 +61,13 @@ ADB="$DATA/sdk/platform-tools/adb"
         echo "No log found at: $DATA/startup.log"
     fi
     echo
+    echo "=== Emulator log ==="
+    if [ -f "$DATA/emulator.log" ]; then
+        tail -n 300 "$DATA/emulator.log"
+    else
+        echo "No emulator log found."
+    fi
+    echo
     echo "=== Recent Dromaius crash reports ==="
     found=0
     for report in "$HOME/Library/Logs/DiagnosticReports"/dromaius*.ips \
