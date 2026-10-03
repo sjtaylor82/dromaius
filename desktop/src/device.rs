@@ -284,6 +284,7 @@ pub fn find_bridge_apk() -> Option<PathBuf> {
     for dir in exe.ancestors().skip(1) {
         for candidate in [
             dir.join("dromaius-bridge.apk"),
+            dir.join("android-bridge/app/build/outputs/apk/release/app-release.apk"),
             dir.join("android-bridge/app/build/outputs/apk/debug/app-debug.apk"),
         ] {
             if candidate.exists() {

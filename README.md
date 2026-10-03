@@ -80,6 +80,11 @@ cd android-bridge
 JAVA_HOME="$LOCALAPPDATA/Programs/jdk-21" ANDROID_HOME="$LOCALAPPDATA/Android/Sdk" ./gradlew.bat assembleDebug
 ```
 
+`assembleRelease` signs the bridge with the release key in `signing/`
+(`dromaius-release.jks` and `keystore.properties`). That folder is never
+committed; without it, release builds fall back to the debug key. Always sign
+releases with the same key, or new bridges can't update installed ones.
+
 Build and run the desktop app (it finds the bridge APK in the source tree and
 installs it automatically):
 
