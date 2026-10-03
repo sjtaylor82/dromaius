@@ -1,2 +1,6 @@
 # Release signing key and its passwords: never commit (the repository is public).
 /signing/
+
+# Release packages built from dist/README.txt and the build outputs
+/dist/*/
+/dist/*.zip

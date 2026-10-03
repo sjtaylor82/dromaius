@@ -184,3 +184,19 @@ test('upgrade offers keep a backup by default, and the choice is passed on', asy
   doc.getElementById('update-dialog').close('cancel');
   assert.equal(calls.filter(([c]) => c === 'start_update').length, 1, 'cancel does nothing');
 });
+
+test('an item that stops being long-pressable leaves the Tab order', async () => {
+  const { screen, el } = await load();
+  screen([{ id: 'p', kind: 'text', label: 'Photo', longClickable: true }]);
+  const item = el('p');
+  assert.equal(item.getAttribute('tabindex'), '0');
+
+  screen([{ id: 'p', kind: 'text', label: 'Photo' }]);
+  assert.equal(el('p'), item, 'same element, updated in place');
+  assert.equal(item.hasAttribute('tabindex'), false);
+
+  // Focus moved there by Dromaius (tabindex -1) is not undone by updates.
+  screen([{ id: 'p', kind: 'text', label: 'Photo' }], { focus: 'p' });
+  screen([{ id: 'p', kind: 'text', label: 'Photo' }]);
+  assert.equal(item.getAttribute('tabindex'), '-1');
+});

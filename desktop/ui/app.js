@@ -236,7 +236,14 @@ function updateNode(el, d) {
   const clickable = el.tagName === 'BUTTON';
   if (clickable) el.dataset.act = 'click';
   // Long-press-only items aren't buttons, but must be focusable for Shift+F10.
-  if (!clickable && d.longClickable && el.tabIndex < 0) el.tabIndex = 0;
+  // Remove that again when they stop being long-pressable, so inert content
+  // doesn't linger in the Tab order. (tabindex="-1", set when focus is moved
+  // to plain content, is left alone.)
+  if (!clickable && d.longClickable) {
+    if (el.getAttribute('tabindex') !== '0') el.tabIndex = 0;
+  } else if (el.getAttribute('tabindex') === '0') {
+    el.removeAttribute('tabindex');
+  }
 
   const role = {};
   switch (d.kind) {
