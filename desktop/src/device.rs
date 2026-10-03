@@ -343,11 +343,17 @@ pub fn ensure_bridge(d: &Device, status: &dyn Fn(&str)) -> Result<()> {
             == Some(&stamp);
     if !up_to_date {
         status("Installing the accessibility bridge");
-        adb(
-            &d.sdk,
-            Some(&d.serial),
-            &["install", "-r", "-g", &apk.to_string_lossy()],
-        )?;
+        let apk = apk.to_string_lossy();
+        let install = || adb(&d.sdk, Some(&d.serial), &["install", "-r", "-g", &apk]);
+        if let Err(e) = install() {
+            // A bridge signed with a different key (e.g. an old debug build)
+            // can't be updated in place. It keeps no data, so replace it.
+            if !format!("{e:#}").contains("INSTALL_FAILED_UPDATE_INCOMPATIBLE") {
+                return Err(e);
+            }
+            adb(&d.sdk, Some(&d.serial), &["uninstall", BRIDGE_PACKAGE])?;
+            install()?;
+        }
         if let Some(m) = marker {
             let _ = std::fs::create_dir_all(m.parent().unwrap());
             let _ = std::fs::write(m, &stamp);
