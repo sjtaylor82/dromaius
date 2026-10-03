@@ -29,6 +29,20 @@ pub struct Device {
 
 pub struct StartOptions {
     pub show_emulator: bool,
+    /// Erase the virtual device's apps and data ("start fresh").
+    pub wipe_data: bool,
+    /// How long Android may take to boot.
+    pub boot_timeout: Duration,
+}
+
+impl StartOptions {
+    pub fn new(show_emulator: bool) -> Self {
+        Self {
+            show_emulator,
+            wipe_data: false,
+            boot_timeout: Duration::from_secs(240),
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -146,6 +160,31 @@ pub fn avd_platform() -> Option<String> {
         .map(str::to_string)
 }
 
+/// Points the virtual device at another Android release (e.g. "android-38.0")
+/// and returns the previous one. Its apps and data are kept.
+pub fn set_avd_platform(platform: &str) -> Result<String> {
+    let home = avd_home()?;
+    let config_path = home.join(format!("{}.avd", avd_name())).join("config.ini");
+    let config = std::fs::read_to_string(&config_path)?;
+    let old = avd_platform()
+        .ok_or_else(|| anyhow!("can't tell which Android the virtual device uses"))?;
+    let config = config.replace(&old, platform);
+    std::fs::write(&config_path, config)?;
+    let ini_path = home.join(format!("{}.ini", avd_name()));
+    if let Ok(ini) = std::fs::read_to_string(&ini_path) {
+        std::fs::write(&ini_path, ini.replace(&old, platform))?;
+    }
+    Ok(old)
+}
+
+/// Deletes the Quick Boot snapshot, which only works with the Android
+/// release (and emulator) that made it.
+pub fn delete_snapshot() {
+    if let Some(dir) = avd_dir() {
+        let _ = std::fs::remove_dir_all(dir.join("snapshots").join("default_boot"));
+    }
+}
+
 /// The virtual device to use: an existing legacy one, otherwise ours.
 fn avd_name() -> &'static str {
     let legacy = avd_home().map(|h| h.join(format!("{LEGACY_AVD_NAME}.ini")).exists());
@@ -236,6 +275,9 @@ pub fn start(sdk: PathBuf, opts: &StartOptions, status: &dyn Fn(&str)) -> Result
         if !opts.show_emulator {
             cmd.arg("-no-window");
         }
+        if opts.wipe_data {
+            cmd.arg("-wipe-data");
+        }
         quiet(&mut cmd)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -245,11 +287,11 @@ pub fn start(sdk: PathBuf, opts: &StartOptions, status: &dyn Fn(&str)) -> Result
     }
 
     let device = Device { sdk, serial };
-    wait_for_boot(&device, status)?;
+    wait_for_boot(&device, opts.boot_timeout, status)?;
     Ok(device)
 }
 
-fn wait_for_boot(d: &Device, status: &dyn Fn(&str)) -> Result<()> {
+fn wait_for_boot(d: &Device, timeout: Duration, status: &dyn Fn(&str)) -> Result<()> {
     let started = Instant::now();
     let mut announced = false;
     loop {
@@ -266,8 +308,11 @@ fn wait_for_boot(d: &Device, status: &dyn Fn(&str)) -> Result<()> {
             status("Android is still starting, please wait");
             announced = true;
         }
-        if started.elapsed() > Duration::from_secs(240) {
-            bail!("Android did not finish starting within 4 minutes");
+        if started.elapsed() > timeout {
+            bail!(
+                "Android did not finish starting within {} minutes",
+                timeout.as_secs() / 60
+            );
         }
         std::thread::sleep(Duration::from_millis(500));
     }
@@ -301,7 +346,39 @@ fn marker_path() -> Option<PathBuf> {
 }
 
 /// Installs the bridge when it's missing or the APK changed, then enables it.
+/// Android sometimes restarts once more right after booting (e.g. after an
+/// upgrade), so connection errors wait for it to come back and retry.
 pub fn ensure_bridge(d: &Device, status: &dyn Fn(&str)) -> Result<()> {
+    let mut attempt = 0;
+    loop {
+        match ensure_bridge_once(d, status) {
+            Ok(()) => return Ok(()),
+            Err(e) if attempt < 3 && is_connection_error(&e) => {
+                attempt += 1;
+                status("Android is restarting, waiting for it");
+                std::thread::sleep(Duration::from_secs(3));
+                wait_for_boot(d, Duration::from_secs(300), status)?;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// adb lost the emulator (it is rebooting or briefly unreachable).
+fn is_connection_error(e: &anyhow::Error) -> bool {
+    let text = format!("{e:#}");
+    [
+        "not found",
+        "offline",
+        "no devices",
+        "device still",
+        "closed",
+    ]
+    .iter()
+    .any(|k| text.contains(k))
+}
+
+fn ensure_bridge_once(d: &Device, status: &dyn Fn(&str)) -> Result<()> {
     let apk = find_bridge_apk().ok_or_else(|| anyhow!("Bridge APK not found"))?;
     let meta = std::fs::metadata(&apk)?;
     let stamp = format!(
@@ -358,6 +435,32 @@ pub fn ensure_bridge(d: &Device, status: &dyn Fn(&str)) -> Result<()> {
         }
     }
 
+    // On a brand-new Android, first-boot setup can reset accessibility
+    // settings right after we set them, so check the bridge actually runs.
+    for attempt in 0..10 {
+        if bridge_bound(d) {
+            break;
+        }
+        enable_bridge_service(d)?;
+        std::thread::sleep(Duration::from_secs(3));
+        if attempt == 2 {
+            status("Waiting for Android to finish setting up");
+        }
+    }
+    adb(
+        &d.sdk,
+        Some(&d.serial),
+        &[
+            "forward",
+            &format!("tcp:{BRIDGE_PORT}"),
+            &format!("localabstract:{BRIDGE_SOCKET}"),
+        ],
+    )?;
+    Ok(())
+}
+
+/// Adds the bridge to Android's enabled accessibility services.
+fn enable_bridge_service(d: &Device) -> Result<()> {
     let current = adb(
         &d.sdk,
         Some(&d.serial),
@@ -410,16 +513,20 @@ pub fn ensure_bridge(d: &Device, status: &dyn Fn(&str)) -> Result<()> {
             "1",
         ],
     )?;
+    Ok(())
+}
+
+/// Whether Android has started the bridge service.
+fn bridge_bound(d: &Device) -> bool {
     adb(
         &d.sdk,
         Some(&d.serial),
-        &[
-            "forward",
-            &format!("tcp:{BRIDGE_PORT}"),
-            &format!("localabstract:{BRIDGE_SOCKET}"),
-        ],
-    )?;
-    Ok(())
+        &["shell", "dumpsys", "accessibility"],
+    )
+    .is_ok_and(|out| {
+        out.lines()
+            .any(|l| l.contains("Bound services") && l.contains("Dromaius Bridge"))
+    })
 }
 
 impl Device {
@@ -431,6 +538,23 @@ impl Device {
     /// Shuts down, saving a Quick Boot snapshot.
     pub fn shutdown(&self) -> Result<()> {
         adb(&self.sdk, Some(&self.serial), &["emu", "kill"]).map(|_| ())
+    }
+
+    /// Shuts the emulator down (resuming it first if paused) and waits until
+    /// it has exited, so its files can be replaced.
+    pub fn stop_and_wait(&self) -> Result<()> {
+        let _ = adb(&self.sdk, Some(&self.serial), &["emu", "avd", "start"]);
+        let _ = self.shutdown();
+        let started = Instant::now();
+        while device_state(&self.sdk, &self.serial).is_some() {
+            if started.elapsed() > Duration::from_secs(90) {
+                bail!("Android did not shut down");
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        // The emulator process lingers briefly after adb loses it.
+        std::thread::sleep(Duration::from_secs(3));
+        Ok(())
     }
 
     /// Starts an app's launcher activity through adb.

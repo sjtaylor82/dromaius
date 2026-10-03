@@ -1,0 +1,12 @@
+{
+  "name": "dromaius-ui-tests",
+  "private": true,
+  "type": "module",
+  "description": "DOM tests for the Dromaius web front end (desktop/ui)",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "jsdom": "^30.1.1"
+  }
+}

@@ -209,7 +209,8 @@ fn find_archive(doc: &roxmltree::Document, path: &str) -> Option<Archive> {
 }
 
 /// The newest stable Google Play image for this CPU, as (platform, archive).
-fn newest_image(images: &roxmltree::Document) -> Option<(String, Archive)> {
+/// `pin` restricts the choice to one release (a testing aid, see `plan`).
+fn newest_image(images: &roxmltree::Document, pin: Option<&str>) -> Option<(String, Archive)> {
     let suffix = format!(";google_apis_playstore;{}", image_abi());
     let mut candidates: Vec<(Vec<u32>, String)> = images
         .descendants()
@@ -223,6 +224,9 @@ fn newest_image(images: &roxmltree::Document) -> Option<(String, Archive)> {
         })
         .collect();
     candidates.sort();
+    if let Some(pin) = pin {
+        candidates.retain(|(_, path)| path.split(';').nth(1) == Some(pin));
+    }
     candidates.iter().rev().find_map(|(_, path)| {
         let platform = path.split(';').nth(1)?.to_string();
         find_archive(images, path).map(|a| (platform, a))
@@ -286,7 +290,10 @@ pub fn plan(sdk: &Path) -> Result<Plan> {
     if android.is_none() {
         let img_xml = fetch_text(&format!("{PLAY_IMAGES}sys-img2-3.xml"))?;
         let images = roxmltree::Document::parse(&img_xml).context("reading Google's image list")?;
-        let (platform, a) = newest_image(&images)
+        // Testing aid: DROMAIUS_TEST_ANDROID=android-36 installs that release
+        // instead of the newest, so upgrades can be tried out.
+        let pin = std::env::var("DROMAIUS_TEST_ANDROID").ok();
+        let (platform, a) = newest_image(&images, pin.as_deref())
             .ok_or_else(|| anyhow!("no Google Play system image available for {}", image_abi()))?;
         if a.license != license_id {
             license_text_value = license_text(&images, &a.license).or(license_text_value);
@@ -359,7 +366,7 @@ pub fn versions(sdk: &Path, in_use: Option<&str>) -> Versions {
     }
     if let Ok(xml) = fetch_text(&format!("{PLAY_IMAGES}sys-img2-3.xml"))
         && let Ok(images) = roxmltree::Document::parse(&xml)
-        && let Some((platform, a)) = newest_image(&images)
+        && let Some((platform, a)) = newest_image(&images, None)
         && let Some(current) = in_use.and_then(parse_version)
         && parse_version(&platform).is_some_and(|p| p > current)
     {
@@ -399,6 +406,20 @@ pub fn install(
     total: u64,
     progress: &dyn Fn(Progress),
 ) -> Result<()> {
+    let file = fetch(sdk, d, before, total, progress)?;
+    progress(Progress::Unpacking { label: d.label });
+    unpack(&file, d)
+}
+
+/// Downloads an archive (resuming if interrupted) and verifies its checksum.
+/// Returns the downloaded file.
+pub fn fetch(
+    sdk: &Path,
+    d: &Download,
+    before: u64,
+    total: u64,
+    progress: &dyn Fn(Progress),
+) -> Result<PathBuf> {
     let tmp = sdk.join(".downloads");
     std::fs::create_dir_all(&tmp)?;
     let file_name = d.url.rsplit('/').next().unwrap_or("download.zip");
@@ -442,8 +463,11 @@ pub fn install(
             d.label
         );
     }
+    Ok(part)
+}
 
-    progress(Progress::Unpacking { label: d.label });
+/// Replaces `d.dest` with the contents of a downloaded archive, then deletes it.
+pub fn unpack(part: &Path, d: &Download) -> Result<()> {
     if d.dest.exists() {
         std::fs::remove_dir_all(&d.dest)?;
     }
@@ -451,7 +475,7 @@ pub fn install(
     // Archives contain one top-level folder (e.g. "emulator/"); unpack its contents.
     let out = quiet(&mut Command::new(tar()))
         .args(["-xf"])
-        .arg(&part)
+        .arg(part)
         .args(["--strip-components", "1", "-C"])
         .arg(&d.dest)
         .stdin(Stdio::null())
@@ -464,8 +488,44 @@ pub fn install(
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    let _ = std::fs::remove_file(&part);
+    let _ = std::fs::remove_file(part);
     Ok(())
+}
+
+/// The newest stable emulator, ready to download into `sdk`.
+pub fn emulator_download(sdk: &Path) -> Result<Download> {
+    let xml = fetch_text(&format!("{REPO}repository2-3.xml"))?;
+    let repo = roxmltree::Document::parse(&xml).context("reading Google's package list")?;
+    let a = find_archive(&repo, "emulator")
+        .ok_or_else(|| anyhow!("emulator not found in Google's package list"))?;
+    Ok(Download {
+        label: "Android emulator update",
+        url: format!("{REPO}{}", a.url),
+        sha1: a.sha1,
+        size: a.size,
+        dest: sdk.join("emulator"),
+    })
+}
+
+/// The newest stable Google Play image, ready to download into `sdk`, with
+/// its platform name (e.g. "android-38.0").
+pub fn android_download(sdk: &Path) -> Result<(String, Download)> {
+    let xml = fetch_text(&format!("{PLAY_IMAGES}sys-img2-3.xml"))?;
+    let images = roxmltree::Document::parse(&xml).context("reading Google's image list")?;
+    let (platform, a) = newest_image(&images, None)
+        .ok_or_else(|| anyhow!("no Google Play system image available for {}", image_abi()))?;
+    let download = Download {
+        label: "Android system update",
+        url: format!("{PLAY_IMAGES}{}", a.url),
+        sha1: a.sha1,
+        size: a.size,
+        dest: sdk
+            .join("system-images")
+            .join(&platform)
+            .join("google_apis_playstore")
+            .join(image_abi()),
+    };
+    Ok((platform, download))
 }
 
 fn sha1_file(path: &Path) -> Result<String> {

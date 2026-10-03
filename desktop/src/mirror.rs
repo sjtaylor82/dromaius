@@ -66,6 +66,10 @@ pub struct MNode {
     pub input_focused: bool,
     pub range: Option<Range>,
     pub position: Option<(usize, usize)>,
+    /// (row, column) within a grid, 0-based.
+    pub cell: Option<(i32, i32)>,
+    /// (rows, columns) of a grid container.
+    pub grid_size: Option<(i32, i32)>,
     pub custom_actions: Vec<CustomAction>,
     pub can_scroll_forward: bool,
     pub can_scroll_backward: bool,
@@ -208,6 +212,7 @@ impl Builder {
             if !kids.is_empty() {
                 let mut node = self.make_node(n, id, ctx, false, None);
                 node.is_stop = false;
+                node.grid_size = n.collection.map(|c| (c.rows, c.cols));
                 node.role = match n.collection {
                     Some(col) if col.cols > 1 && col.rows > 1 => Role::Grid,
                     Some(_) => Role::List,
@@ -312,6 +317,11 @@ impl Builder {
             input_focused: n.focused,
             range: n.range,
             position,
+            cell: match (n.item, ctx.collection) {
+                (Some(item), Some(_)) => Some((item.row, item.col)),
+                _ => None,
+            },
+            grid_size: None,
             custom_actions: n.custom_actions.clone(),
             can_scroll_forward: n.actions.contains(&android_action::SCROLL_FORWARD),
             can_scroll_backward: n.actions.contains(&android_action::SCROLL_BACKWARD),

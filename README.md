@@ -101,6 +101,17 @@ The Rust build links the C runtime statically (`desktop/.cargo/config.toml`).
 With this toolchain, `WebView2Loader.dll` (Microsoft's redistributable loader)
 must ship next to the `.exe`; it is copied to `target/` by the build.
 
+### Tests
+
+```bash
+cd desktop && cargo test
+cd desktop/ui-tests && npm install && npm test
+```
+
+The Rust tests cover the Android tree simplification and setup logic; the
+`ui-tests` load the real page in jsdom and check the HTML a screen reader gets
+(roles, ARIA, focus, editing).
+
 ### Debugging
 
 - `DROMAIUS_SDK_DIR` and `ANDROID_AVD_HOME` point Dromaius at other folders,

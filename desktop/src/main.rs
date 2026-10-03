@@ -114,6 +114,11 @@ fn global(core: State<Shared>, action: String) {
 }
 
 #[tauri::command]
+fn start_update(core: State<Shared>, kind: String) {
+    core.lock().unwrap().start_update(&kind);
+}
+
+#[tauri::command]
 fn answer_license(core: State<Shared>, accepted: bool) {
     core.lock().unwrap().answer_license(accepted);
 }
@@ -166,8 +171,16 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { .. } = event {
-                window.state::<Shared>().lock().unwrap().on_exit();
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                let core = window.state::<Shared>();
+                let mut core = core.lock().unwrap();
+                // Closing mid-update could leave Android half switched over.
+                if core.updating() {
+                    api.prevent_close();
+                    core.explain_busy();
+                } else {
+                    core.on_exit();
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -182,7 +195,8 @@ fn main() {
             show_apps,
             launch,
             install_link,
-            answer_license
+            answer_license,
+            start_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dromaius");

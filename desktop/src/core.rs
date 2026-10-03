@@ -18,6 +18,13 @@ use crate::view::{self, ViewNode};
 pub enum BackendEvent {
     Setup(SetupPayload),
     About(AboutPayload),
+    /// An Android upgrade that tried to keep data failed and was rolled
+    /// back; offer upgrading with fresh data instead.
+    UpgradeRolledBack,
+    /// An update (successful or not) has finished.
+    MaintenanceDone {
+        message: String,
+    },
     LicenseRequest {
         text: String,
         android: String,
@@ -95,6 +102,16 @@ pub enum SetupPayload {
     Done,
 }
 
+/// An available update, shown on the Your apps page.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateOffer {
+    /// "emulator", "android" or "androidFresh"; "info" has no button.
+    pub kind: String,
+    pub text: String,
+    pub action: Option<String>,
+}
+
 /// Versions in use, and available updates, for the About section.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -107,7 +124,7 @@ pub struct AboutPayload {
     pub sdk_size: Option<String>,
     /// Disk space used by the virtual device's data (apps, sign-ins).
     pub data_size: Option<String>,
-    pub updates: Vec<String>,
+    pub updates: Vec<UpdateOffer>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -149,6 +166,11 @@ pub struct Core {
     setup: Option<SetupPayload>,
     license_reply: Option<Sender<bool>>,
     about: Option<AboutPayload>,
+    bridge_started: bool,
+    /// An update is running (Android may be restarting).
+    maintenance: bool,
+    /// The last upgrade attempt that kept data failed.
+    offer_fresh_upgrade: bool,
 }
 
 impl Core {
@@ -174,6 +196,9 @@ impl Core {
             setup: None,
             license_reply: None,
             about: None,
+            bridge_started: false,
+            maintenance: false,
+            offer_fresh_upgrade: false,
         }
     }
 
@@ -206,31 +231,26 @@ impl Core {
             };
             let sdk_dir = sdk.as_ref().ok().cloned();
             let result = sdk
-                .and_then(|sdk| {
-                    device::start(
-                        sdk,
-                        &device::StartOptions {
-                            show_emulator: show,
-                        },
-                        &status,
-                    )
-                })
+                .and_then(|sdk| device::start(sdk, &device::StartOptions::new(show), &status))
                 .and_then(|d| device::ensure_bridge(&d, &status).map(|_| d));
+            // Connect first; the rest only adds information and can follow.
+            let device = result.as_ref().ok().cloned();
+            let _ = events.send(match result {
+                Ok(d) => BackendEvent::DeviceReady(d),
+                Err(e) => BackendEvent::DeviceFailed(format!("{e:#}")),
+            });
+            let Some(d) = device else { return };
             // Give apps the PC's position: the emulator's default GPS fix is
             // an arbitrary spot in California.
-            if let (Ok(d), true) = (&result, set_location) {
+            if set_location {
                 match device::pc_location().and_then(|loc| d.set_location(&loc).map(|_| loc)) {
                     Ok(loc) => status(&format!("Location set to {}", loc.place)),
                     Err(e) => eprintln!("could not set the location: {e:#}"),
                 }
             }
-            if let (Ok(_), Some(sdk)) = (&result, &sdk_dir) {
+            if let Some(sdk) = &sdk_dir {
                 let _ = events.send(BackendEvent::About(about(sdk)));
             }
-            let _ = events.send(match result {
-                Ok(d) => BackendEvent::DeviceReady(d),
-                Err(e) => BackendEvent::DeviceFailed(format!("{e:#}")),
-            });
         });
     }
 
@@ -293,9 +313,26 @@ impl Core {
                 let _ = self.app.emit("setup", &payload);
                 self.setup = Some(payload);
             }
-            BackendEvent::About(about) => {
+            BackendEvent::About(mut about) => {
+                if self.offer_fresh_upgrade
+                    && let Some(android) =
+                        about.updates.iter().find(|u| u.kind == "android").cloned()
+                {
+                    about.updates.push(UpdateOffer {
+                        kind: "androidFresh".into(),
+                        text: "Upgrading while keeping your apps didn't work last time. You can upgrade and start \
+                               fresh instead: this erases your apps, their data and your sign-ins."
+                            .into(),
+                        action: android.action.map(|a| format!("{a}, starting fresh")),
+                    });
+                }
                 let _ = self.app.emit("about", &about);
                 self.about = Some(about);
+            }
+            BackendEvent::UpgradeRolledBack => self.offer_fresh_upgrade = true,
+            BackendEvent::MaintenanceDone { message } => {
+                self.maintenance = false;
+                self.set_status(&message);
             }
             BackendEvent::LicenseRequest {
                 text,
@@ -318,7 +355,11 @@ impl Core {
             BackendEvent::DeviceReady(d) => {
                 self.device = Some(d);
                 self.set_status("Android is ready, connecting");
-                self.bridge.spawn(self.events.clone());
+                // The bridge connection reconnects by itself after restarts.
+                if !self.bridge_started {
+                    self.bridge_started = true;
+                    self.bridge.spawn(self.events.clone());
+                }
             }
             BackendEvent::DeviceFailed(e) => {
                 self.set_status(&format!("Could not start Android: {e}"))
@@ -644,11 +685,54 @@ impl Core {
         });
     }
 
+    /// Starts an update chosen on the Your apps page.
+    pub fn start_update(&mut self, kind: &str) {
+        if !["emulator", "android", "androidFresh"].contains(&kind) {
+            return;
+        }
+        if self.maintenance {
+            return self.announce("An update is already running");
+        }
+        let Some(device) = self.device.clone() else {
+            return self.announce("Android is not running yet");
+        };
+        self.maintenance = true;
+        self.setup = None;
+        // Withdraw the offers while the update runs; fresh ones follow it.
+        if let Some(about) = &mut self.about {
+            about.updates.clear();
+            let _ = self.app.emit("about", &*about);
+        }
+        self.set_mode(Mode::Starting);
+        self.set_status(if kind == "emulator" {
+            "Updating the Android emulator"
+        } else {
+            "Upgrading Android"
+        });
+        let (events, show, kind) = (
+            self.events.clone(),
+            self.opts.show_emulator,
+            kind.to_string(),
+        );
+        std::thread::spawn(move || run_update(&kind, device, show, &events));
+    }
+
     /// The user's answer to Google's licence during first-run setup.
     pub fn answer_license(&mut self, accepted: bool) {
         if let Some(reply) = self.license_reply.take() {
             let _ = reply.send(accepted);
         }
+    }
+
+    /// Whether an update is running, during which the window shouldn't close.
+    pub fn updating(&self) -> bool {
+        self.maintenance
+    }
+
+    pub fn explain_busy(&mut self) {
+        self.announce(
+            "Android is being updated. Dromaius will be ready to close when the update finishes.",
+        );
     }
 
     /// Called when the window closes: pause (or shut down) the emulator.
@@ -734,24 +818,129 @@ fn run_setup(events: &Sender<BackendEvent>) -> anyhow::Result<std::path::PathBuf
             });
             anyhow::bail!("virtualization is not available: {detail}");
         }
-        setup::install(&sdk, d, before, total, &|p| {
-            send(match p {
-                setup::Progress::Downloading { label, done, total } => SetupPayload::Downloading {
-                    label: label.into(),
-                    percent: (done * 100 / total.max(1)).min(100) as u8,
-                    done_mb: done / 1_000_000,
-                    total_mb: total / 1_000_000,
-                },
-                setup::Progress::Unpacking { label } => SetupPayload::Unpacking {
-                    label: label.into(),
-                },
-            })
-        })
-        .map_err(|e| fail(format!("{e:#}")))?;
+        setup::install(&sdk, d, before, total, &|p| send(progress_payload(p)))
+            .map_err(|e| fail(format!("{e:#}")))?;
         before += d.size;
     }
     send(SetupPayload::Done);
     Ok(sdk)
+}
+
+fn progress_payload(p: crate::setup::Progress) -> SetupPayload {
+    match p {
+        crate::setup::Progress::Downloading { label, done, total } => SetupPayload::Downloading {
+            label: label.into(),
+            percent: (done * 100 / total.max(1)).min(100) as u8,
+            done_mb: done / 1_000_000,
+            total_mb: total / 1_000_000,
+        },
+        crate::setup::Progress::Unpacking { label } => SetupPayload::Unpacking {
+            label: label.into(),
+        },
+    }
+}
+
+/// Installs an emulator or Android update. Runs on its own thread; ends by
+/// sending DeviceReady (Android running again) and MaintenanceDone.
+fn run_update(kind: &str, d: Device, show: bool, events: &Sender<BackendEvent>) {
+    use crate::setup;
+    let send = |p: SetupPayload| {
+        let _ = events.send(BackendEvent::Setup(p));
+    };
+    let status = |s: &str| {
+        let _ = events.send(BackendEvent::Status(s.to_string()));
+    };
+    let restart = |opts: &device::StartOptions| {
+        device::start(d.sdk.clone(), opts, &status)
+            .and_then(|nd| device::ensure_bridge(&nd, &status).map(|_| nd))
+    };
+
+    let result: anyhow::Result<(Device, String)> = (|| {
+        send(SetupPayload::Checking);
+        if kind == "emulator" {
+            let dl = setup::emulator_download(&d.sdk)?;
+            let file = setup::fetch(&d.sdk, &dl, 0, dl.size, &|p| send(progress_payload(p)))?;
+            status("Restarting Android to finish the update");
+            d.stop_and_wait()?;
+            send(SetupPayload::Unpacking {
+                label: dl.label.into(),
+            });
+            setup::unpack(&file, &dl)?;
+            let nd = restart(&device::StartOptions::new(show))?;
+            return Ok((nd, "The Android emulator is updated.".into()));
+        }
+
+        let fresh = kind == "androidFresh";
+        let (platform, dl) = setup::android_download(&d.sdk)?;
+        let name = setup::android_name(&platform);
+        // Download next to the current release, which stays as a fallback.
+        if !dl.dest.join("system.img").exists() {
+            let file = setup::fetch(&d.sdk, &dl, 0, dl.size, &|p| send(progress_payload(p)))?;
+            send(SetupPayload::Unpacking {
+                label: dl.label.into(),
+            });
+            setup::unpack(&file, &dl)?;
+        }
+        status(&format!(
+            "Restarting Android to switch to {name}. The first start can take several minutes."
+        ));
+        d.stop_and_wait()?;
+        let old = device::set_avd_platform(&platform)?;
+        device::delete_snapshot();
+        let opts = device::StartOptions {
+            wipe_data: fresh,
+            boot_timeout: std::time::Duration::from_secs(600),
+            ..device::StartOptions::new(show)
+        };
+        match restart(&opts) {
+            Ok(nd) => {
+                // Free the old release's space, but only in our own folder.
+                if d.sdk == setup::own_sdk_dir() && old != platform {
+                    let _ = std::fs::remove_dir_all(d.sdk.join("system-images").join(&old));
+                }
+                Ok((nd, format!("Android is upgraded to {name}.")))
+            }
+            Err(e) if !fresh => {
+                // Roll back to the previous release with the data untouched.
+                status(&format!(
+                    "{name} didn't start. Going back to {}.",
+                    setup::android_name(&old)
+                ));
+                let _ = d.stop_and_wait();
+                device::set_avd_platform(&old)?;
+                device::delete_snapshot();
+                let nd = restart(&device::StartOptions::new(show))?;
+                let _ = events.send(BackendEvent::UpgradeRolledBack);
+                Ok((
+                    nd,
+                    format!(
+                        "The upgrade to {name} didn't work ({e:#}). Android is back on {} with your apps and data. \
+                         Your apps page now also offers upgrading with a fresh start.",
+                        setup::android_name(&old)
+                    ),
+                ))
+            }
+            Err(e) => Err(e),
+        }
+    })();
+
+    let message = match result {
+        Ok((nd, message)) => {
+            let sdk = nd.sdk.clone();
+            let _ = events.send(BackendEvent::DeviceReady(nd));
+            let _ = events.send(BackendEvent::About(about(&sdk)));
+            message
+        }
+        Err(e) => {
+            let message =
+                format!("The update didn't finish: {e:#}. Close and reopen Dromaius to try again.");
+            send(SetupPayload::Failed {
+                message: message.clone(),
+            });
+            message
+        }
+    };
+    let _ = events.send(BackendEvent::MaintenanceDone { message });
 }
 
 fn virtualization_help(detail: &str) -> String {
@@ -771,16 +960,34 @@ fn about(sdk: &std::path::Path) -> AboutPayload {
     let own = sdk == setup::own_sdk_dir();
     let mut updates = Vec::new();
     if let Some((name, size)) = &v.newer_android {
-        updates.push(format!(
-            "A newer Android is available: {name} ({:.1} GB download).",
-            *size as f64 / 1e9
-        ));
+        updates.push(UpdateOffer {
+            kind: "android".into(),
+            text: format!(
+                "A newer Android is available: {name}, a {:.1} GB download. Dromaius tries to keep your apps and \
+                 sign-ins. If that doesn't work, it goes back to your current Android with everything as it was.",
+                *size as f64 / 1e9
+            ),
+            action: Some(format!("Upgrade to {name}")),
+        });
     }
     if let Some(rev) = &v.newer_emulator {
         updates.push(if own {
-            format!("A newer Android emulator is available: version {rev}.")
+            UpdateOffer {
+                kind: "emulator".into(),
+                text: format!(
+                    "A newer Android emulator is available: version {rev}, about a 460 MB download. \
+                     Your apps and data are kept."
+                ),
+                action: Some("Update the emulator".into()),
+            }
         } else {
-            format!("A newer Android emulator is available: version {rev}. Update it with Android Studio's SDK Manager.")
+            UpdateOffer {
+                kind: "info".into(),
+                text: format!(
+                    "A newer Android emulator is available: version {rev}. Update it with Android Studio's SDK Manager."
+                ),
+                action: None,
+            }
         });
     }
     AboutPayload {

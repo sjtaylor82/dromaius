@@ -32,6 +32,12 @@ pub struct ViewNode {
     /// (position, set size), 1-based.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pos: Option<(usize, usize)>,
+    /// (row, column) within a grid, 0-based.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cell: Option<(i32, i32)>,
+    /// (rows, columns) of a grid.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grid_size: Option<(i32, i32)>,
     /// (min, max, current)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<(f64, f64, f64)>,
@@ -79,7 +85,8 @@ fn kind(role: Role) -> &'static str {
         Role::Label => "text",
         Role::Image => "image",
         Role::ListItem => "listitem",
-        Role::List | Role::Grid => "list",
+        Role::List => "list",
+        Role::Grid => "grid",
         Role::Group => "group",
     }
 }
@@ -120,6 +127,8 @@ fn node(model: &Model, m: &MNode) -> ViewNode {
         long_clickable: m.long_clickable,
         expanded: m.expanded,
         pos: m.position,
+        cell: m.cell,
+        grid_size: m.grid_size,
         range: m.range.map(|r| (r.min, r.max, r.current)),
         placeholder: m.placeholder.clone().filter(|p| *p != m.label),
         description: (!description.is_empty()).then(|| description.join(". ")),

@@ -152,17 +152,27 @@ function tagFor(d) {
     case 'heading': return 'h2';
     case 'list': return 'ul';
     case 'group': return 'div';
+    case 'grid': return 'div';
     case 'text': return d.clickable ? 'button' : 'p';
     case 'image': return d.clickable ? 'button' : 'div';
-    case 'listitem': return d.clickable || d.longClickable ? 'button' : 'div';
-    default: return 'button'; // button, checkbox, switch, radio, tab, combobox
+    case 'listitem': return d.clickable ? 'button' : 'div';
+    // button, checkbox, switch, radio, tab, combobox: only a real button
+    // when Android says it can be activated (or toggled).
+    default: return d.clickable || d.checked !== undefined ? 'button' : 'p';
   }
+}
+
+/** Whether Android reports that tapping this element does something. */
+function activatable(d) {
+  return !!d.clickable || d.checked !== undefined;
 }
 
 function nodeItem(d) {
   const tag = tagFor(d);
   return {
-    key: `${tag}:${d.id}:${d.clickable ? 1 : 0}`,
+    // Kind is part of the key: an element whose role changes is replaced,
+    // not patched, so no attribute from its old role can linger.
+    key: `${d.kind}:${tag}:${d.id}:${d.clickable ? 1 : 0}`,
     create() {
       const el = document.createElement(tag);
       el.dataset.id = d.id;
@@ -206,31 +216,48 @@ function liItem(item, pos) {
   };
 }
 
+/** Attributes whose meaning depends on the element's role. */
+const ROLE_ATTRS = ['role', 'aria-checked', 'aria-selected', 'aria-haspopup', 'aria-rowcount', 'aria-colcount'];
+
+/** Sets the role-specific attributes in `wanted` and removes all others. */
+function setRoleAttrs(el, wanted) {
+  for (const name of ROLE_ATTRS) setAttr(el, name, wanted[name] ?? null);
+}
+
 function updateNode(el, d) {
   el._desc = d;
-  const description = [d.description, d.error && `Error: ${d.error}`].filter(Boolean).join('. ');
+  const hints = [];
+  if (d.longClickable && !d.clickable) hints.push('More actions with Shift+F10');
+  const description = [d.description, d.error && `Error: ${d.error}`, ...hints].filter(Boolean).join('. ');
   setAttr(el, 'aria-description', description || null);
   setAttr(el, 'aria-roledescription', d.roleDescription || null);
   setAttr(el, 'aria-disabled', d.disabled ? 'true' : null);
   setAttr(el, 'aria-expanded', d.expanded === undefined ? null : String(d.expanded));
   const clickable = el.tagName === 'BUTTON';
   if (clickable) el.dataset.act = 'click';
+  // Long-press-only items aren't buttons, but must be focusable for Shift+F10.
+  if (!clickable && d.longClickable && el.tabIndex < 0) el.tabIndex = 0;
 
+  const role = {};
   switch (d.kind) {
     case 'checkbox':
     case 'switch':
     case 'radio':
-      setAttr(el, 'role', d.kind);
-      setAttr(el, 'aria-checked', String(!!d.checked));
+      if (clickable) {
+        role.role = d.kind;
+        role['aria-checked'] = String(!!d.checked);
+      }
       setText(el, d.label || d.kind);
       break;
     case 'tab':
-      setAttr(el, 'role', 'tab');
-      setAttr(el, 'aria-selected', String(!!d.selected));
+      if (clickable) {
+        role.role = 'tab';
+        role['aria-selected'] = String(!!d.selected);
+      }
       setText(el, d.label);
       break;
     case 'combobox':
-      setAttr(el, 'aria-haspopup', 'listbox');
+      if (clickable) role['aria-haspopup'] = 'listbox';
       setText(el, d.label);
       break;
     case 'edit':
@@ -272,7 +299,7 @@ function updateNode(el, d) {
       if (clickable) {
         setText(el, d.label || 'Image');
       } else {
-        setAttr(el, 'role', 'img');
+        role.role = 'img';
         setAttr(el, 'aria-label', d.label || 'Image');
       }
       break;
@@ -284,8 +311,19 @@ function updateNode(el, d) {
       patch(el, items);
       break;
     }
+    case 'grid':
+      // A static table rather than ARIA grid: screen readers keep browse
+      // mode in tables and offer table navigation (e.g. NVDA Ctrl+Alt+arrows).
+      role.role = 'table';
+      if (d.gridSize) {
+        role['aria-rowcount'] = d.gridSize[0] > 0 ? d.gridSize[0] : null;
+        role['aria-colcount'] = d.gridSize[1] > 0 ? d.gridSize[1] : null;
+      }
+      setAttr(el, 'aria-label', d.label || null);
+      patch(el, gridRows(d));
+      break;
     case 'group': {
-      setAttr(el, 'role', d.label ? 'group' : null);
+      role.role = d.label ? 'group' : undefined;
       setAttr(el, 'aria-label', d.label || null);
       const items = (d.children || []).map(nodeItem);
       if (d.less) items.unshift(scrollItem(d, false));
@@ -296,6 +334,61 @@ function updateNode(el, d) {
     default:
       setText(el, d.label || (clickable ? 'Unlabelled button' : ''));
   }
+  setRoleAttrs(el, role);
+}
+
+/** Grid children grouped into table rows by their row index. */
+function gridRows(d) {
+  const rows = new Map();
+  let lastRow = 0;
+  for (const c of d.children || []) {
+    const row = c.cell ? c.cell[0] : lastRow;
+    lastRow = row;
+    if (!rows.has(row)) rows.set(row, []);
+    rows.get(row).push(c);
+  }
+  const items = [...rows.entries()].sort((a, b) => a[0] - b[0]).map(([row, cells]) => ({
+    key: `row:${d.id}:${row}`,
+    create() {
+      const r = document.createElement('div');
+      r.setAttribute('role', 'row');
+      return r;
+    },
+    update(r) {
+      setAttr(r, 'aria-rowindex', d.gridSize && row >= 0 ? row + 1 : null);
+      patch(r, cells.map((c) => cellItem(nodeItem(c), c.cell)));
+    },
+  }));
+  for (const forward of [false, true]) {
+    if (forward ? d.more : d.less) {
+      const item = {
+        key: `row:${forward ? 'more' : 'less'}:${d.id}`,
+        create() {
+          const r = document.createElement('div');
+          r.setAttribute('role', 'row');
+          return r;
+        },
+        update: (r) => patch(r, [cellItem(scrollItem(d, forward))]),
+      };
+      if (forward) items.push(item); else items.unshift(item);
+    }
+  }
+  return items;
+}
+
+function cellItem(item, cell) {
+  return {
+    key: `cell:${item.key}`,
+    create() {
+      const c = document.createElement('div');
+      c.setAttribute('role', 'cell');
+      return c;
+    },
+    update(c) {
+      setAttr(c, 'aria-colindex', cell && cell[1] >= 0 ? cell[1] + 1 : null);
+      patch(c, [item]);
+    },
+  };
 }
 
 function updateEdit(el, d) {
@@ -329,7 +422,8 @@ function rememberSent(id, value) {
 function openActions(el) {
   const d = el._desc;
   if (!d) return;
-  const actions = [['Activate', () => invoke('act', { id: d.id, action: 'click' })]];
+  const actions = [];
+  if (activatable(d)) actions.push(['Activate', () => invoke('act', { id: d.id, action: 'click' })]);
   if (d.longClickable) actions.push(['Long press', () => invoke('act', { id: d.id, action: 'longClick' })]);
   for (const [actionId, label] of d.customActions || []) {
     actions.push([label, () => invoke('custom_action', { id: d.id, actionId })]);
@@ -337,6 +431,10 @@ function openActions(el) {
   if (d.expanded === false) actions.push(['Expand', () => invoke('act', { id: d.id, action: 'expand' })]);
   if (d.expanded === true) actions.push(['Collapse', () => invoke('act', { id: d.id, action: 'collapse' })]);
 
+  if (actions.length === 0) {
+    announce('No actions for this item');
+    return;
+  }
   const dialog = $('actions-dialog');
   setText($('actions-title'), `Actions for ${d.label || 'this item'}`);
   const ul = $('actions-list');
@@ -495,7 +593,7 @@ function renderSetup(setup) {
         return li;
       }));
       setText($('license-space'),
-        `You need about ${Math.ceil(gb * 2.5)} GB of free disk space while installing. Afterwards Android uses about ` +
+        `You need about ${Math.ceil(gb * 2.5 + 4)} GB of free disk space. Afterwards Android uses about ` +
         `${Math.ceil(gb * 1.5)} GB, plus about 4 GB for the snapshot that lets it start in seconds, plus the apps you install. ` +
         'Google requires you to accept its licence first. ' +
         'The licence text follows, then Accept and Decline buttons.');
@@ -558,7 +656,7 @@ function renderAbout(about) {
     ['Android emulator', about.emulator ? `Version ${about.emulator}` : 'Unknown'],
     ['Android files', about.sdkSize ? `${about.sdk} (${about.sdkSize})` : about.sdk],
     ['Your Android data', about.dataSize || 'Unknown'],
-    ['Updates', about.updates.length ? about.updates.join(' ') : 'Everything is up to date'],
+    ['Updates', about.updates.length ? about.updates.map((u) => u.text).join(' ') : 'Everything is up to date'],
   ];
   $('about-list').replaceChildren(...rows.flatMap(([term, value]) => {
     const dt = document.createElement('dt');
@@ -568,12 +666,46 @@ function renderAbout(about) {
     return [dt, dd];
   }));
   $('update-notice').hidden = about.updates.length === 0;
-  $('update-list').replaceChildren(...about.updates.map((text) => {
+  $('update-list').replaceChildren(...about.updates.map((update) => {
     const li = document.createElement('li');
-    li.textContent = text;
+    const p = document.createElement('p');
+    p.textContent = update.text;
+    li.append(p);
+    if (update.action) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = update.action;
+      b.addEventListener('click', () => offerUpdate(update));
+      li.append(b);
+    }
     return li;
   }));
 }
+
+let pendingUpdate = null;
+
+function offerUpdate(update) {
+  if (update.kind === 'emulator') {
+    invoke('start_update', { kind: update.kind });
+    return;
+  }
+  // Android upgrades restart Android and may affect data: confirm first.
+  pendingUpdate = update;
+  setText($('update-title'), update.action);
+  setText($('update-text'), update.text);
+  setText($('update-confirm'), update.kind === 'androidFresh' ? 'Erase and upgrade' : 'Upgrade');
+  $('update-dialog').returnValue = '';
+  $('update-dialog').showModal();
+}
+
+$('update-dialog').addEventListener('close', () => {
+  if ($('update-dialog').returnValue === 'confirm' && pendingUpdate) {
+    invoke('start_update', { kind: pendingUpdate.kind });
+  } else {
+    currentHeading()?.focus();
+  }
+  pendingUpdate = null;
+});
 
 function applyState(state) {
   setText($('status'), state.status);
