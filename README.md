@@ -57,7 +57,8 @@ location), `--mock <snapshot.json>` (render a saved screen without Android).
 ## Requirements for users
 
 - Windows 10/11 64-bit with hardware virtualization and the **Windows Hypervisor
-  Platform** feature enabled (macOS support is planned)
+  Platform** feature enabled, or macOS 11 or later (preview; see
+  `dist/README-mac.txt` for the Mac keys and first-open step)
 - 8 GB RAM (16 GB recommended), about 12 GB free disk space: Android itself
   is about 4 GB, its quick-start snapshot about 4 GB, plus your apps
 - An internet connection for the first start. Dromaius then downloads Android
@@ -89,8 +90,12 @@ JAVA_HOME="$LOCALAPPDATA/Programs/jdk-21" ANDROID_HOME="$LOCALAPPDATA/Android/Sd
 committed; without it, release builds fall back to the debug key. Always sign
 releases with the same key, or new bridges can't update installed ones.
 
-Build and run the desktop app (it finds the bridge APK in the source tree and
-installs it automatically):
+Build and run the desktop app. The signed bridge
+(`android-bridge/app/build/outputs/apk/release/app-release.apk`, or the file
+named by `DROMAIUS_EMBED_APK`) is built into the executable, which unpacks and
+installs it into Android when needed; build the bridge first. Without it the
+build warns, and Dromaius looks for `dromaius-bridge.apk` next to the
+executable instead.
 
 ```bash
 cd desktop
@@ -99,7 +104,19 @@ cargo run
 
 The Rust build links the C runtime statically (`desktop/.cargo/config.toml`).
 With this toolchain, `WebView2Loader.dll` (Microsoft's redistributable loader)
-must ship next to the `.exe`; it is copied to `target/` by the build.
+must ship next to the `.exe`; it is copied to `target/` by the build. The
+Windows download is therefore `dromaius.exe`, `WebView2Loader.dll` and
+`dist/README.txt`.
+
+### macOS
+
+The Mac app is built by GitHub Actions (`.github/workflows/build.yml`): run the
+workflow from the Actions tab for a test build, or push a `v*` tag to attach it
+to that release. It is a universal app (Apple Silicon and Intel), ad-hoc signed
+but not notarized, so users open it once via Open in Finder's menu
+(see `dist/README-mac.txt`). The workflow embeds the signed bridge from the
+latest GitHub release, so the signing key stays off GitHub; publish the
+release's `dromaius-bridge.apk` asset whenever the bridge changes.
 
 ### Tests
 

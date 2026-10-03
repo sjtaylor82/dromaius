@@ -4,8 +4,8 @@
 # downloadable artifact. Pushing a version tag (v*) also attaches the build to
 # that tag's GitHub release.
 #
-# The signed Android bridge is taken from the latest GitHub release, so the
-# signing key never has to be stored on GitHub.
+# The signed Android bridge is taken from the latest GitHub release and built
+# into the program, so the signing key never has to be stored on GitHub.
 
 name: Build
 
@@ -34,18 +34,20 @@ jobs:
         working-directory: desktop/ui-tests
         run: npm ci && npm test
 
+      - name: Get the signed bridge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download --repo "${{ github.repository }}" --pattern dromaius-bridge.apk --dir "$RUNNER_TEMP"
+          echo "DROMAIUS_EMBED_APK=$RUNNER_TEMP/dromaius-bridge.apk" >> "$GITHUB_ENV"
+
       - name: Build the universal app
         working-directory: desktop
         run: npx --yes @tauri-apps/cli@2 build --target universal-apple-darwin --bundles app
 
-      - name: Add the bridge and package
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Package
         run: |
           APP=desktop/target/universal-apple-darwin/release/bundle/macos/Dromaius.app
-          gh release download --repo "${{ github.repository }}" --pattern dromaius-bridge.apk --dir "$APP/Contents/Resources"
-          # Adding a file invalidates the bundle's ad-hoc signature; sign again.
-          codesign --force --deep --sign - "$APP"
           codesign --verify --deep --strict "$APP"
           VERSION=$(node -p "require('./desktop/tauri.conf.json').version")
           mkdir -p "out/Dromaius" && cp -R "$APP" out/Dromaius/ && cp dist/README-mac.txt out/Dromaius/README.txt

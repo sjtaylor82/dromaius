@@ -406,10 +406,29 @@ fn wait_for_boot(d: &Device, timeout: Duration, status: &dyn Fn(&str)) -> Result
     }
 }
 
-/// Finds the bridge APK: next to the executable, or in the development tree.
+/// The signed bridge, built into the executable (see build.rs).
+#[cfg(embedded_bridge)]
+const EMBEDDED_BRIDGE: Option<&[u8]> =
+    Some(include_bytes!(concat!(env!("OUT_DIR"), "/bridge.apk")));
+#[cfg(not(embedded_bridge))]
+const EMBEDDED_BRIDGE: Option<&[u8]> = None;
+
+/// Finds the bridge APK: a path from DROMAIUS_BRIDGE_APK, the copy built into
+/// the executable, or (for development builds without one) a file next to the
+/// executable or in the source tree.
 pub fn find_bridge_apk() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("DROMAIUS_BRIDGE_APK") {
         return Some(PathBuf::from(p));
+    }
+    if let Some(bytes) = EMBEDDED_BRIDGE {
+        // adb installs from a file: unpack it, but only when it changed.
+        let sdk = crate::setup::own_sdk_dir();
+        let path = sdk.parent().unwrap_or(&sdk).join("dromaius-bridge.apk");
+        if std::fs::read(&path).ok().as_deref() != Some(bytes) {
+            let _ = std::fs::create_dir_all(path.parent()?);
+            std::fs::write(&path, bytes).ok()?;
+        }
+        return Some(path);
     }
     let exe = std::env::current_exe().ok()?;
     for dir in exe.ancestors().skip(1) {
@@ -470,15 +489,12 @@ fn is_connection_error(e: &anyhow::Error) -> bool {
 
 fn ensure_bridge_once(d: &Device, status: &dyn Fn(&str)) -> Result<()> {
     let apk = find_bridge_apk().ok_or_else(|| anyhow!("Bridge APK not found"))?;
-    let meta = std::fs::metadata(&apk)?;
-    let stamp = format!(
-        "{}:{}:{}",
-        d.serial,
-        meta.len(),
-        meta.modified()?
-            .duration_since(std::time::UNIX_EPOCH)?
-            .as_secs()
-    );
+    // Identify the bridge by its contents, so unpacking it again (or a new
+    // file date) doesn't cause needless reinstalls.
+    let digest = sha1_smol::Sha1::from(std::fs::read(&apk)?)
+        .digest()
+        .to_string();
+    let stamp = format!("{}:{digest}", d.serial);
     // Remove the bridge from before the rename so two copies don't run.
     if adb(
         &d.sdk,
