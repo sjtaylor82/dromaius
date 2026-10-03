@@ -89,8 +89,9 @@ class BridgeService : AccessibilityService() {
             }
             AccessibilityEvent.TYPE_NOTIFICATION_STATE_CHANGED -> {
                 // Toasts arrive as notification-state events without a Notification.
-                if (event.parcelableData !is Notification) {
-                    announce(event.text.joinToString(" "))
+                when (val data = event.parcelableData) {
+                    is Notification -> notificationPosted(event.packageName?.toString() ?: "", data)
+                    else -> announce(event.text.joinToString(" "))
                 }
             }
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
@@ -103,6 +104,31 @@ class BridgeService : AccessibilityService() {
             }
             else -> scheduleSnapshot()
         }
+    }
+
+    private var lastNotification = ""
+
+    /** Passes a new notification to the desktop, which announces it. */
+    private fun notificationPosted(pkg: String, n: Notification) {
+        // Ongoing ones (music, downloads, running services) update constantly.
+        if (n.flags and (Notification.FLAG_ONGOING_EVENT or Notification.FLAG_GROUP_SUMMARY) != 0) return
+        val extras = n.extras
+        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
+        val text = (extras.getCharSequence(Notification.EXTRA_BIG_TEXT)
+            ?: extras.getCharSequence(Notification.EXTRA_TEXT))?.toString() ?: ""
+        if (title.isBlank() && text.isBlank()) return
+        val app = try {
+            packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+        } catch (_: PackageManager.NameNotFoundException) {
+            pkg
+        }
+        // Apps often re-post the same notification; announce it once.
+        val key = "$pkg|$title|$text"
+        if (key == lastNotification) return
+        lastNotification = key
+        server?.send(
+            JSONObject().put("type", "notification").put("app", app).put("title", title).put("text", text)
+        )
     }
 
     private fun announce(text: String) {

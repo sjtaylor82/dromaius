@@ -27,6 +27,14 @@ pub enum FromBridge {
     Announce {
         text: String,
     },
+    /// An app posted a notification.
+    Notification {
+        app: String,
+        #[serde(default)]
+        title: String,
+        #[serde(default)]
+        text: String,
+    },
     WindowChanged {},
     Result {
         req: u64,

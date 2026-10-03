@@ -144,13 +144,12 @@ pub fn avd_dir() -> Option<PathBuf> {
 
 /// The Android release the virtual device runs, e.g. "android-37.0".
 pub fn avd_platform() -> Option<String> {
-    let config = std::fs::read_to_string(
-        avd_home()
-            .ok()?
-            .join(format!("{}.avd", avd_name()))
-            .join("config.ini"),
-    )
-    .ok()?;
+    avd_dir().and_then(|d| platform_in(&d))
+}
+
+/// The Android release recorded in a device folder's config.ini.
+fn platform_in(dir: &Path) -> Option<String> {
+    let config = std::fs::read_to_string(dir.join("config.ini")).ok()?;
     let sysdir = config
         .lines()
         .find_map(|l| l.strip_prefix("image.sysdir.1="))?;
@@ -160,29 +159,115 @@ pub fn avd_platform() -> Option<String> {
         .map(str::to_string)
 }
 
-/// Points the virtual device at another Android release (e.g. "android-38.0")
-/// and returns the previous one. Its apps and data are kept.
-pub fn set_avd_platform(platform: &str) -> Result<String> {
-    let home = avd_home()?;
-    let config_path = home.join(format!("{}.avd", avd_name())).join("config.ini");
-    let config = std::fs::read_to_string(&config_path)?;
-    let old = avd_platform()
-        .ok_or_else(|| anyhow!("can't tell which Android the virtual device uses"))?;
-    let config = config.replace(&old, platform);
-    std::fs::write(&config_path, config)?;
-    let ini_path = home.join(format!("{}.ini", avd_name()));
-    if let Ok(ini) = std::fs::read_to_string(&ini_path) {
-        std::fs::write(&ini_path, ini.replace(&old, platform))?;
-    }
-    Ok(old)
+/// Where the previous Android is kept after an upgrade (if the user chose to).
+pub fn backup_dir() -> Option<PathBuf> {
+    avd_dir().map(|d| d.with_extension("avd-backup"))
 }
 
-/// Deletes the Quick Boot snapshot, which only works with the Android
-/// release (and emulator) that made it.
-pub fn delete_snapshot() {
-    if let Some(dir) = avd_dir() {
-        let _ = std::fs::remove_dir_all(dir.join("snapshots").join("default_boot"));
+/// Where the current device waits while an upgrade is in progress.
+fn upgrading_dir() -> Option<PathBuf> {
+    avd_dir().map(|d| d.with_extension("avd-upgrading"))
+}
+
+/// The Android release of the kept backup, if there is one.
+pub fn backup_platform() -> Option<String> {
+    backup_dir()
+        .filter(|d| d.exists())
+        .and_then(|d| platform_in(&d))
+}
+
+/// Folder renames can fail briefly while Windows releases file handles.
+fn rename_dir(from: &Path, to: &Path) -> Result<()> {
+    let mut attempt = 0;
+    loop {
+        match std::fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(e) if attempt < 10 => {
+                attempt += 1;
+                eprintln!("rename {} failed ({e}), retrying", from.display());
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            Err(e) => return Err(e).with_context(|| format!("moving {}", from.display())),
+        }
     }
+}
+
+/// Moves the current device aside so an upgrade can start a fresh one. Its
+/// Quick Boot snapshot is dropped (it's large and can be rebuilt).
+pub fn set_aside_for_upgrade() -> Result<()> {
+    let (dir, aside) = (
+        avd_dir().context("no virtual device")?,
+        upgrading_dir().context("no virtual device")?,
+    );
+    if aside.exists() {
+        std::fs::remove_dir_all(&aside)?;
+    }
+    let _ = std::fs::remove_dir_all(dir.join("snapshots"));
+    rename_dir(&dir, &aside)
+}
+
+/// After a successful upgrade: keep the previous device as the backup
+/// (replacing any older backup), or delete it.
+pub fn finish_upgrade(keep: bool) -> Result<()> {
+    let aside = upgrading_dir().context("no virtual device")?;
+    if keep {
+        let backup = backup_dir().context("no virtual device")?;
+        if backup.exists() {
+            std::fs::remove_dir_all(&backup)?;
+        }
+        rename_dir(&aside, &backup)
+    } else {
+        std::fs::remove_dir_all(&aside).context("deleting the previous Android")
+    }
+}
+
+/// After a failed upgrade: discard the new device and bring back the previous one.
+pub fn undo_upgrade() -> Result<()> {
+    let (dir, aside) = (
+        avd_dir().context("no virtual device")?,
+        upgrading_dir().context("no virtual device")?,
+    );
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir)?;
+    }
+    rename_dir(&aside, &dir)
+}
+
+/// Swaps the current device and the backup. The emulator must be stopped.
+pub fn swap_with_backup() -> Result<()> {
+    let (dir, backup, tmp) = (
+        avd_dir().context("no virtual device")?,
+        backup_dir().context("no virtual device")?,
+        upgrading_dir().context("no virtual device")?,
+    );
+    if !backup.exists() {
+        bail!("there is no backup to switch to");
+    }
+    let _ = std::fs::remove_dir_all(dir.join("snapshots"));
+    rename_dir(&dir, &tmp)?;
+    rename_dir(&backup, &dir)?;
+    rename_dir(&tmp, &backup)
+}
+
+pub fn delete_backup() -> Result<()> {
+    match backup_dir() {
+        Some(b) if b.exists() => std::fs::remove_dir_all(&b).context("deleting the backup"),
+        _ => Ok(()),
+    }
+}
+
+/// Disk space used by a folder tree.
+pub fn dir_size(dir: &Path) -> u64 {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| match e.metadata() {
+            Ok(m) if m.is_dir() => dir_size(&e.path()),
+            Ok(m) => m.len(),
+            Err(_) => 0,
+        })
+        .sum()
 }
 
 /// The virtual device to use: an existing legacy one, otherwise ours.
@@ -196,12 +281,10 @@ fn avd_name() -> &'static str {
 }
 
 pub fn ensure_avd(sdk: &Path) -> Result<()> {
-    if avd_name() == LEGACY_AVD_NAME {
-        return Ok(());
-    }
+    let name = avd_name();
     let home = avd_home()?;
-    let ini = home.join(format!("{AVD_NAME}.ini"));
-    let dir = home.join(format!("{AVD_NAME}.avd"));
+    let ini = home.join(format!("{name}.ini"));
+    let dir = home.join(format!("{name}.avd"));
     if ini.exists() && dir.join("config.ini").exists() {
         return Ok(());
     }
@@ -210,13 +293,13 @@ pub fn ensure_avd(sdk: &Path) -> Result<()> {
     std::fs::write(
         &ini,
         format!(
-            "avd.ini.encoding=UTF-8\npath={}\npath.rel=avd/{AVD_NAME}.avd\ntarget={platform}\n",
+            "avd.ini.encoding=UTF-8\npath={}\npath.rel=avd/{name}.avd\ntarget={platform}\n",
             dir.display()
         ),
     )?;
     let sep = std::path::MAIN_SEPARATOR;
     let config = format!(
-        "AvdId={AVD_NAME}
+        "AvdId={name}
 avd.ini.displayname=Dromaius
 abi.type={abi}
 hw.cpu.arch={arch}

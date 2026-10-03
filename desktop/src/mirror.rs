@@ -259,7 +259,12 @@ impl Builder {
             label = n
                 .tooltip
                 .clone()
-                .or_else(|| n.view_id.as_deref().and_then(readable_view_id))
+                .or_else(|| {
+                    n.view_id
+                        .as_deref()
+                        .filter(|_| control_like(n))
+                        .and_then(readable_view_id)
+                })
                 .unwrap_or_default();
         }
         let text = if n.editable && !n.showing_hint {
@@ -343,11 +348,25 @@ fn is_stop_action(n: &ANode) -> bool {
     is_actionable(n) && !is_wrapper(n, own_text(n).is_some())
 }
 
+/// The text, unless it's empty or only a visual separator such as "•".
 fn non_empty(s: &Option<String>) -> Option<String> {
     s.as_ref()
         .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
+        .filter(|s| {
+            s.chars()
+                .any(|c| !c.is_whitespace() && !"•·|-–—/\\,.:;".contains(c))
+        })
         .map(str::to_string)
+}
+
+/// Classes that are controls in their own right: their internal id may be
+/// the only hint of what they do (e.g. an unlabelled icon button).
+fn control_like(n: &ANode) -> bool {
+    let cls = n.cls.rsplit('.').next().unwrap_or("");
+    cls.ends_with("Button")
+        || cls.contains("Image")
+        || cls.contains("Switch")
+        || cls.ends_with("CheckBox")
 }
 
 /// Text that belongs to the node itself (content description wins, like on Android).
@@ -486,20 +505,9 @@ fn is_wrapper(n: &ANode, has_own_text: bool) -> bool {
     if count_actionable(n) >= 2 {
         return true;
     }
-    let cls = n.cls.rsplit('.').next().unwrap_or("");
-    let generic = matches!(
-        cls,
-        "View"
-            | "ViewGroup"
-            | "FrameLayout"
-            | "LinearLayout"
-            | "RelativeLayout"
-            | "ConstraintLayout"
-    );
-    generic
-        && !has_text(n)
-        && n.tooltip.is_none()
-        && n.view_id.as_deref().and_then(readable_view_id).is_none()
+    // A clickable area with no text anywhere that isn't a control itself:
+    // e.g. a field's wrapper, or the notification shade's "scrim" backdrop.
+    !control_like(n) && !has_text(n) && n.tooltip.is_none()
 }
 
 #[cfg(test)]
@@ -543,6 +551,28 @@ mod tests {
             w.children.len(),
             1,
             "list container is the only top-level child"
+        );
+    }
+
+    #[test]
+    fn notification_shade_reads_cleanly() {
+        let s = snapshot(
+            r#"{"width":1080,"height":2400,"windows":[{"id":5,"type":"system","layer":1,"focused":true,
+            "root":{"id":1,"cls":"android.widget.FrameLayout","children":[
+              {"id":2,"cls":"com.android.systemui.scrim.ScrimView","clickable":true,"viewId":"com.android.systemui:id/scrim_behind"},
+              {"id":3,"cls":"android.view.View","clickable":true,"viewId":"com.android.systemui:id/alternate_expand_target"},
+              {"id":4,"cls":"android.widget.TextView","text":"Google Play services"},
+              {"id":6,"cls":"android.widget.TextView","text":"•"},
+              {"id":7,"cls":"android.widget.TextView","text":"1 minute ago"},
+              {"id":8,"cls":"android.widget.ImageButton","clickable":true,"viewId":"com.android.systemui:id/expand_button"}
+            ]}}]}"#,
+        );
+        let m = Model::from_snapshot(&s);
+        let w = m.nav_window().unwrap();
+        let labels: Vec<_> = w.order.iter().map(|id| m.nodes[id].label.clone()).collect();
+        assert_eq!(
+            labels,
+            ["Google Play services", "1 minute ago", "expand button"]
         );
     }
 

@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
+use anyhow::Context;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
@@ -18,9 +19,6 @@ use crate::view::{self, ViewNode};
 pub enum BackendEvent {
     Setup(SetupPayload),
     About(AboutPayload),
-    /// An Android upgrade that tried to keep data failed and was rolled
-    /// back; offer upgrading with fresh data instead.
-    UpgradeRolledBack,
     /// An update (successful or not) has finished.
     MaintenanceDone {
         message: String,
@@ -106,10 +104,12 @@ pub enum SetupPayload {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateOffer {
-    /// "emulator", "android" or "androidFresh"; "info" has no button.
+    /// "emulator", "android", "switchBackup", "deleteBackup"; "info" has no button.
     pub kind: String,
     pub text: String,
     pub action: Option<String>,
+    /// For "android": the size of the backup the user can choose to keep.
+    pub backup_size: Option<String>,
 }
 
 /// Versions in use, and available updates, for the About section.
@@ -169,8 +169,6 @@ pub struct Core {
     bridge_started: bool,
     /// An update is running (Android may be restarting).
     maintenance: bool,
-    /// The last upgrade attempt that kept data failed.
-    offer_fresh_upgrade: bool,
 }
 
 impl Core {
@@ -198,7 +196,6 @@ impl Core {
             about: None,
             bridge_started: false,
             maintenance: false,
-            offer_fresh_upgrade: false,
         }
     }
 
@@ -240,6 +237,14 @@ impl Core {
                 Err(e) => BackendEvent::DeviceFailed(format!("{e:#}")),
             });
             let Some(d) = device else { return };
+            // The update check and the location lookup both wait on the
+            // network or Windows, so run them side by side.
+            if let Some(sdk) = sdk_dir {
+                let events = events.clone();
+                std::thread::spawn(move || {
+                    let _ = events.send(BackendEvent::About(about(&sdk)));
+                });
+            }
             // Give apps the PC's position: the emulator's default GPS fix is
             // an arbitrary spot in California.
             if set_location {
@@ -247,9 +252,6 @@ impl Core {
                     Ok(loc) => status(&format!("Location set to {}", loc.place)),
                     Err(e) => eprintln!("could not set the location: {e:#}"),
                 }
-            }
-            if let Some(sdk) = &sdk_dir {
-                let _ = events.send(BackendEvent::About(about(sdk)));
             }
         });
     }
@@ -313,23 +315,10 @@ impl Core {
                 let _ = self.app.emit("setup", &payload);
                 self.setup = Some(payload);
             }
-            BackendEvent::About(mut about) => {
-                if self.offer_fresh_upgrade
-                    && let Some(android) =
-                        about.updates.iter().find(|u| u.kind == "android").cloned()
-                {
-                    about.updates.push(UpdateOffer {
-                        kind: "androidFresh".into(),
-                        text: "Upgrading while keeping your apps didn't work last time. You can upgrade and start \
-                               fresh instead: this erases your apps, their data and your sign-ins."
-                            .into(),
-                        action: android.action.map(|a| format!("{a}, starting fresh")),
-                    });
-                }
+            BackendEvent::About(about) => {
                 let _ = self.app.emit("about", &about);
                 self.about = Some(about);
             }
-            BackendEvent::UpgradeRolledBack => self.offer_fresh_upgrade = true,
             BackendEvent::MaintenanceDone { message } => {
                 self.maintenance = false;
                 self.set_status(&message);
@@ -394,6 +383,14 @@ impl Core {
             }
             FromBridge::Tree(snap) => self.on_snapshot(snap),
             FromBridge::Announce { text } => self.announce(&text),
+            FromBridge::Notification { app, title, text } => {
+                let body = [title.as_str(), text.as_str()]
+                    .into_iter()
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(". ");
+                self.announce(&format!("Notification from {app}: {body}"));
+            }
             FromBridge::WindowChanged { .. } => {}
             FromBridge::Result { req, ok, error } => {
                 if ok {
@@ -686,8 +683,8 @@ impl Core {
     }
 
     /// Starts an update chosen on the Your apps page.
-    pub fn start_update(&mut self, kind: &str) {
-        if !["emulator", "android", "androidFresh"].contains(&kind) {
+    pub fn start_update(&mut self, kind: &str, keep_backup: bool) {
+        if !["emulator", "android", "switchBackup", "deleteBackup"].contains(&kind) {
             return;
         }
         if self.maintenance {
@@ -704,17 +701,18 @@ impl Core {
             let _ = self.app.emit("about", &*about);
         }
         self.set_mode(Mode::Starting);
-        self.set_status(if kind == "emulator" {
-            "Updating the Android emulator"
-        } else {
-            "Upgrading Android"
+        self.set_status(match kind {
+            "emulator" => "Updating the Android emulator",
+            "android" => "Upgrading Android",
+            "switchBackup" => "Switching to your other Android",
+            _ => "Deleting the backup",
         });
         let (events, show, kind) = (
             self.events.clone(),
             self.opts.show_emulator,
             kind.to_string(),
         );
-        std::thread::spawn(move || run_update(&kind, device, show, &events));
+        std::thread::spawn(move || run_update(&kind, keep_backup, device, show, &events));
     }
 
     /// The user's answer to Google's licence during first-run setup.
@@ -840,9 +838,9 @@ fn progress_payload(p: crate::setup::Progress) -> SetupPayload {
     }
 }
 
-/// Installs an emulator or Android update. Runs on its own thread; ends by
-/// sending DeviceReady (Android running again) and MaintenanceDone.
-fn run_update(kind: &str, d: Device, show: bool, events: &Sender<BackendEvent>) {
+/// Runs an update or backup action from the Your apps page on its own
+/// thread; ends with DeviceReady (Android running) and MaintenanceDone.
+fn run_update(kind: &str, keep_backup: bool, d: Device, show: bool, events: &Sender<BackendEvent>) {
     use crate::setup;
     let send = |p: SetupPayload| {
         let _ = events.send(BackendEvent::Setup(p));
@@ -854,73 +852,130 @@ fn run_update(kind: &str, d: Device, show: bool, events: &Sender<BackendEvent>) 
         device::start(d.sdk.clone(), opts, &status)
             .and_then(|nd| device::ensure_bridge(&nd, &status).map(|_| nd))
     };
+    let current = device::avd_platform();
+    let current_name = current
+        .as_deref()
+        .map(setup::android_name)
+        .unwrap_or_else(|| "Android".into());
+    // System images can be removed when no device (current or backup) uses them.
+    let remove_unused_image = |platform: &str| {
+        let in_use = [device::avd_platform(), device::backup_platform()];
+        if d.sdk == setup::own_sdk_dir() && !in_use.iter().flatten().any(|p| p == platform) {
+            let _ = std::fs::remove_dir_all(d.sdk.join("system-images").join(platform));
+        }
+    };
 
     let result: anyhow::Result<(Device, String)> = (|| {
         send(SetupPayload::Checking);
-        if kind == "emulator" {
-            let dl = setup::emulator_download(&d.sdk)?;
-            let file = setup::fetch(&d.sdk, &dl, 0, dl.size, &|p| send(progress_payload(p)))?;
-            status("Restarting Android to finish the update");
-            d.stop_and_wait()?;
-            send(SetupPayload::Unpacking {
-                label: dl.label.into(),
-            });
-            setup::unpack(&file, &dl)?;
-            let nd = restart(&device::StartOptions::new(show))?;
-            return Ok((nd, "The Android emulator is updated.".into()));
-        }
-
-        let fresh = kind == "androidFresh";
-        let (platform, dl) = setup::android_download(&d.sdk)?;
-        let name = setup::android_name(&platform);
-        // Download next to the current release, which stays as a fallback.
-        if !dl.dest.join("system.img").exists() {
-            let file = setup::fetch(&d.sdk, &dl, 0, dl.size, &|p| send(progress_payload(p)))?;
-            send(SetupPayload::Unpacking {
-                label: dl.label.into(),
-            });
-            setup::unpack(&file, &dl)?;
-        }
-        status(&format!(
-            "Restarting Android to switch to {name}. The first start can take several minutes."
-        ));
-        d.stop_and_wait()?;
-        let old = device::set_avd_platform(&platform)?;
-        device::delete_snapshot();
-        let opts = device::StartOptions {
-            wipe_data: fresh,
-            boot_timeout: std::time::Duration::from_secs(600),
-            ..device::StartOptions::new(show)
-        };
-        match restart(&opts) {
-            Ok(nd) => {
-                // Free the old release's space, but only in our own folder.
-                if d.sdk == setup::own_sdk_dir() && old != platform {
-                    let _ = std::fs::remove_dir_all(d.sdk.join("system-images").join(&old));
-                }
-                Ok((nd, format!("Android is upgraded to {name}.")))
-            }
-            Err(e) if !fresh => {
-                // Roll back to the previous release with the data untouched.
-                status(&format!(
-                    "{name} didn't start. Going back to {}.",
-                    setup::android_name(&old)
-                ));
-                let _ = d.stop_and_wait();
-                device::set_avd_platform(&old)?;
-                device::delete_snapshot();
+        match kind {
+            "emulator" => {
+                let dl = setup::emulator_download(&d.sdk)?;
+                let file = setup::fetch(&d.sdk, &dl, 0, dl.size, &|p| send(progress_payload(p)))?;
+                status("Restarting Android to finish the update");
+                d.stop_and_wait()?;
+                send(SetupPayload::Unpacking {
+                    label: dl.label.into(),
+                });
+                setup::unpack(&file, &dl)?;
                 let nd = restart(&device::StartOptions::new(show))?;
-                let _ = events.send(BackendEvent::UpgradeRolledBack);
+                Ok((nd, "The Android emulator is updated.".into()))
+            }
+            "deleteBackup" => {
+                let platform = device::backup_platform();
+                device::delete_backup()?;
+                if let Some(p) = platform {
+                    remove_unused_image(&p);
+                }
+                // Android itself keeps running; nothing to restart.
+                Ok((d.clone(), "The backup is deleted.".into()))
+            }
+            "switchBackup" => {
+                let other = device::backup_platform().context("there is no backup to switch to")?;
+                status(&format!(
+                    "Switching to {}. Android restarts, which can take a minute.",
+                    setup::android_name(&other)
+                ));
+                d.stop_and_wait()?;
+                device::swap_with_backup()?;
+                let nd = restart(&device::StartOptions::new(show))?;
                 Ok((
                     nd,
                     format!(
-                        "The upgrade to {name} didn't work ({e:#}). Android is back on {} with your apps and data. \
-                         Your apps page now also offers upgrading with a fresh start.",
-                        setup::android_name(&old)
+                        "Switched to {}. {current_name} is now kept as the backup.",
+                        setup::android_name(&other)
                     ),
                 ))
             }
-            Err(e) => Err(e),
+            _ => {
+                // An Android upgrade. Android can't use an older release's
+                // data (it factory-resets), so the new release starts fresh.
+                let (platform, dl) = setup::android_download(&d.sdk)?;
+                let name = setup::android_name(&platform);
+                if !dl.dest.join("system.img").exists() {
+                    let file =
+                        setup::fetch(&d.sdk, &dl, 0, dl.size, &|p| send(progress_payload(p)))?;
+                    send(SetupPayload::Unpacking {
+                        label: dl.label.into(),
+                    });
+                    setup::unpack(&file, &dl)?;
+                }
+                status(&format!(
+                    "Starting {name} for the first time. This can take several minutes."
+                ));
+                d.stop_and_wait()?;
+                device::set_aside_for_upgrade()?;
+                let opts = device::StartOptions {
+                    boot_timeout: std::time::Duration::from_secs(600),
+                    ..device::StartOptions::new(show)
+                };
+                // Testing aid: DROMAIUS_TEST_FAIL_UPGRADE=1 makes the upgrade
+                // "fail" after the new Android has booted, to test the undo.
+                let outcome = device::ensure_avd(&d.sdk)
+                    .and_then(|_| restart(&opts))
+                    .and_then(|nd| {
+                        if std::env::var_os("DROMAIUS_TEST_FAIL_UPGRADE").is_some() {
+                            anyhow::bail!("simulated failure (DROMAIUS_TEST_FAIL_UPGRADE)");
+                        }
+                        Ok(nd)
+                    });
+                match outcome {
+                    Ok(nd) => {
+                        device::finish_upgrade(keep_backup)?;
+                        if !keep_backup && let Some(old) = &current {
+                            remove_unused_image(old);
+                        }
+                        let kept = if keep_backup {
+                            format!(
+                                " {current_name} is kept as a backup: the Your apps page can switch back to it."
+                            )
+                        } else {
+                            String::new()
+                        };
+                        Ok((
+                            nd,
+                            format!(
+                                "Android is upgraded to {name}. Sign in to Google again from Play Store; your apps \
+                                 are listed under Manage apps and device, Manage, Not installed.{kept}"
+                            ),
+                        ))
+                    }
+                    Err(e) => {
+                        status(&format!(
+                            "{name} didn't start. Going back to {current_name}."
+                        ));
+                        let _ = d.stop_and_wait();
+                        device::undo_upgrade()?;
+                        let nd = restart(&device::StartOptions::new(show))?;
+                        Ok((
+                            nd,
+                            format!(
+                                "The upgrade to {name} didn't work ({e:#}). Android is back on {current_name} with \
+                                 your apps and data exactly as they were."
+                            ),
+                        ))
+                    }
+                }
+            }
         }
     })();
 
@@ -933,7 +988,7 @@ fn run_update(kind: &str, d: Device, show: bool, events: &Sender<BackendEvent>) 
         }
         Err(e) => {
             let message =
-                format!("The update didn't finish: {e:#}. Close and reopen Dromaius to try again.");
+                format!("That didn't finish: {e:#}. Close and reopen Dromaius to try again.");
             send(SetupPayload::Failed {
                 message: message.clone(),
             });
@@ -959,15 +1014,41 @@ fn about(sdk: &std::path::Path) -> AboutPayload {
     let v = setup::versions(sdk, platform.as_deref());
     let own = sdk == setup::own_sdk_dir();
     let mut updates = Vec::new();
+    let avd = device::avd_dir();
+    let data_bytes = avd.as_ref().map_or(0, |d| {
+        dir_size(d).saturating_sub(dir_size(&d.join("snapshots")))
+    });
     if let Some((name, size)) = &v.newer_android {
+        let current = platform
+            .as_deref()
+            .map(setup::android_name)
+            .unwrap_or_else(|| "your current Android".into());
         updates.push(UpdateOffer {
             kind: "android".into(),
             text: format!(
-                "A newer Android is available: {name}, a {:.1} GB download. Dromaius tries to keep your apps and \
-                 sign-ins. If that doesn't work, it goes back to your current Android with everything as it was.",
+                "A newer Android is available: {name}, a {:.1} GB download. Upgrading starts Android fresh: \
+                 {name} can't use {current}'s data, so you'll sign in to Google again and reinstall your apps \
+                 (Play Store lists them for you). You can keep {current} as a backup and switch back to it later.",
                 *size as f64 / 1e9
             ),
             action: Some(format!("Upgrade to {name}")),
+            backup_size: Some(size_text(data_bytes)),
+        });
+    }
+    if let (Some(other), Some(backup)) = (device::backup_platform(), device::backup_dir()) {
+        let other = setup::android_name(&other);
+        let size = size_text(dir_size(&backup));
+        updates.push(UpdateOffer {
+            kind: "switchBackup".into(),
+            text: format!("Your previous Android, {other}, is kept as a backup ({size}) with its apps and sign-ins."),
+            action: Some(format!("Switch back to {other}")),
+            backup_size: None,
+        });
+        updates.push(UpdateOffer {
+            kind: "deleteBackup".into(),
+            text: format!("Deleting the {other} backup frees {size} or more of disk space."),
+            action: Some(format!("Delete the {other} backup")),
+            backup_size: None,
         });
     }
     if let Some(rev) = &v.newer_emulator {
@@ -979,6 +1060,7 @@ fn about(sdk: &std::path::Path) -> AboutPayload {
                      Your apps and data are kept."
                 ),
                 action: Some("Update the emulator".into()),
+                backup_size: None,
             }
         } else {
             UpdateOffer {
@@ -987,6 +1069,7 @@ fn about(sdk: &std::path::Path) -> AboutPayload {
                     "A newer Android emulator is available: version {rev}. Update it with Android Studio's SDK Manager."
                 ),
                 action: None,
+                backup_size: None,
             }
         });
     }
@@ -996,31 +1079,18 @@ fn about(sdk: &std::path::Path) -> AboutPayload {
         emulator: v.emulator,
         sdk: sdk.display().to_string(),
         sdk_size: own.then(|| size_text(dir_size(sdk))),
-        data_size: device::avd_dir().map(|d| {
-            let snapshots = dir_size(&d.join("snapshots"));
+        data_size: avd.map(|d| {
             format!(
                 "{} for apps and data, plus {} for the quick-start snapshot",
-                size_text(dir_size(&d).saturating_sub(snapshots)),
-                size_text(snapshots)
+                size_text(data_bytes),
+                size_text(dir_size(&d.join("snapshots")))
             )
         }),
         updates,
     }
 }
 
-/// Total size of the files under `dir`.
-fn dir_size(dir: &std::path::Path) -> u64 {
-    std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| match e.metadata() {
-            Ok(m) if m.is_dir() => dir_size(&e.path()),
-            Ok(m) => m.len(),
-            Err(_) => 0,
-        })
-        .sum()
-}
+use device::dir_size;
 
 fn size_text(bytes: u64) -> String {
     if bytes >= 1_000_000_000 {

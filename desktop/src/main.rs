@@ -114,8 +114,10 @@ fn global(core: State<Shared>, action: String) {
 }
 
 #[tauri::command]
-fn start_update(core: State<Shared>, kind: String) {
-    core.lock().unwrap().start_update(&kind);
+fn start_update(core: State<Shared>, kind: String, keep_backup: Option<bool>) {
+    core.lock()
+        .unwrap()
+        .start_update(&kind, keep_backup.unwrap_or(true));
 }
 
 #[tauri::command]

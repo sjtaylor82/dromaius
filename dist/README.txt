@@ -55,7 +55,8 @@ Ctrl+L                    Find an app on Google Play (type its name or paste
                           a Google Play link)
 Shift+F10 or Applications More actions for the current item, such as long press
 F5                        Refresh the screen
-Alt+N                     Android notifications
+Alt+N                     Android notifications (new ones are also announced
+                          as they arrive)
 F1                        Keyboard help
 
 In edit fields, press Enter on the field (or NVDA+Space) to type, as on any

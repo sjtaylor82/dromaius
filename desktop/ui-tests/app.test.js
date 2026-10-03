@@ -39,7 +39,7 @@ async function load() {
   await new Promise((r) => setTimeout(r, 20));
   const screen = (nodes, extra = {}) => handlers.screen({ payload: { title: 'Test', package: 'test', nodes, ...extra } });
   const el = (id) => w.document.querySelector(`#screen [data-id="${id}"]`);
-  return { w, doc: w.document, calls, screen, el };
+  return { w, doc: w.document, calls, screen, el, handlers };
 }
 
 test('an element whose role changes is replaced, leaving no stale ARIA', async () => {
@@ -154,4 +154,33 @@ test('a new screen moves focus to its heading; a focus hint wins', async () => {
   assert.equal(doc.activeElement.id, 'screen-title');
   screen([{ id: 'x', kind: 'button', label: 'One', clickable: true }], { focus: 'x' });
   assert.equal(doc.activeElement.dataset.id, 'x');
+});
+
+test('upgrade offers keep a backup by default, and the choice is passed on', async () => {
+  const { doc, calls, handlers } = await load();
+  // The About payload drives the Updates list on the Your apps page.
+  const about = {
+    dromaius: '0.1.0', android: 'Android 16 (API 36) with Google Play', emulator: '37.2.12', sdk: 'x',
+    updates: [
+      { kind: 'android', text: 'A newer Android is available.', action: 'Upgrade to Android 17 (API 37)', backupSize: '3.8 GB' },
+      { kind: 'deleteBackup', text: 'Deleting frees space.', action: 'Delete the Android 15 backup' },
+    ],
+  };
+  handlers.about({ payload: about });
+  const buttons = [...doc.querySelectorAll('#update-list button')];
+  assert.deepEqual(buttons.map((b) => b.textContent), ['Upgrade to Android 17 (API 37)', 'Delete the Android 15 backup']);
+
+  buttons[0].click();
+  assert.equal(doc.getElementById('update-keep-row').hidden, false);
+  assert.equal(doc.getElementById('update-keep').checked, true);
+  assert.match(doc.getElementById('update-keep-label').textContent, /3\.8 GB/);
+  doc.getElementById('update-keep').checked = false;
+  doc.getElementById('update-dialog').close('confirm');
+  assert.deepEqual(calls.at(-1), ['start_update', { kind: 'android', keepBackup: false }]);
+
+  buttons[1].click();
+  assert.equal(doc.getElementById('update-keep-row').hidden, true, 'no backup choice when deleting');
+  assert.equal(doc.getElementById('update-confirm').textContent, 'Delete backup');
+  doc.getElementById('update-dialog').close('cancel');
+  assert.equal(calls.filter(([c]) => c === 'start_update').length, 1, 'cancel does nothing');
 });

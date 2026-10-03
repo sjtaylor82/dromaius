@@ -564,6 +564,7 @@ document.addEventListener('keydown', (e) => {
 
 $('btn-apps').addEventListener('click', showApps);
 $('btn-back').addEventListener('click', () => invoke('global', { action: 'back' }));
+$('btn-notifications').addEventListener('click', () => invoke('global', { action: 'notifications' }));
 $('btn-install').addEventListener('click', openInstall);
 $('btn-help').addEventListener('click', () => $('help-dialog').showModal());
 
@@ -689,18 +690,29 @@ function offerUpdate(update) {
     invoke('start_update', { kind: update.kind });
     return;
   }
-  // Android upgrades restart Android and may affect data: confirm first.
+  // Everything else restarts Android or deletes data: confirm first.
   pendingUpdate = update;
   setText($('update-title'), update.action);
   setText($('update-text'), update.text);
-  setText($('update-confirm'), update.kind === 'androidFresh' ? 'Erase and upgrade' : 'Upgrade');
+  const upgrade = update.kind === 'android';
+  $('update-keep-row').hidden = !upgrade;
+  $('update-keep').checked = true;
+  if (upgrade && update.backupSize) {
+    setText($('update-keep-label'), `Keep my current Android as a backup (about ${update.backupSize}), so I can switch back`);
+  }
+  setText($('update-note'), {
+    android: 'Android restarts during the upgrade. The first start on the new version can take several minutes.',
+    switchBackup: 'Android restarts, which can take a minute. Your current Android is kept as the backup.',
+    deleteBackup: 'This permanently deletes the backup, including its apps, their data and sign-ins.',
+  }[update.kind] || '');
+  setText($('update-confirm'), { android: 'Upgrade', switchBackup: 'Switch', deleteBackup: 'Delete backup' }[update.kind] || 'OK');
   $('update-dialog').returnValue = '';
   $('update-dialog').showModal();
 }
 
 $('update-dialog').addEventListener('close', () => {
   if ($('update-dialog').returnValue === 'confirm' && pendingUpdate) {
-    invoke('start_update', { kind: pendingUpdate.kind });
+    invoke('start_update', { kind: pendingUpdate.kind, keepBackup: $('update-keep').checked });
   } else {
     currentHeading()?.focus();
   }
