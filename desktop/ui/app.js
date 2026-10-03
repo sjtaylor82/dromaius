@@ -29,9 +29,9 @@ function announce(text) {
   clearTimeout(announceClear);
   // A short delay makes repeated identical messages announce again.
   setTimeout(() => { live.textContent = text; }, 60);
-  // Clear it afterwards so old messages don't linger at the end of the
-  // page, where browse mode would read them as page content.
-  announceClear = setTimeout(() => { live.textContent = ''; }, 6000);
+  // Screen readers announce the change immediately; clear it soon after so
+  // it doesn't linger at the end of the page, where browse mode reads it.
+  announceClear = setTimeout(() => { live.textContent = ''; }, 1500);
 }
 
 function setAttr(el, name, value) {
