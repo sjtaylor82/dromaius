@@ -220,6 +220,7 @@ impl Core {
         let set_location = !self.opts.no_location;
         std::thread::spawn(move || {
             let status = |s: &str| {
+                crate::timing::mark(&format!("status: {s}"));
                 let _ = events.send(BackendEvent::Status(s.to_string()));
             };
             let sdk = match device::find_sdk() {
@@ -227,9 +228,16 @@ impl Core {
                 None => run_setup(&events),
             };
             let sdk_dir = sdk.as_ref().ok().cloned();
+            if let Some(dir) = &sdk_dir {
+                crate::timing::mark(&format!("using Android files in {}", dir.display()));
+            }
             let result = sdk
                 .and_then(|sdk| device::start(sdk, &device::StartOptions::new(show), &status))
                 .and_then(|d| device::ensure_bridge(&d, &status).map(|_| d));
+            crate::timing::mark(match &result {
+                Ok(_) => "Android ready, bridge installed and running",
+                Err(_) => "start-up failed",
+            });
             // Connect first; the rest only adds information and can follow.
             let device = result.as_ref().ok().cloned();
             let _ = events.send(match result {
@@ -243,13 +251,17 @@ impl Core {
                 let events = events.clone();
                 std::thread::spawn(move || {
                     let _ = events.send(BackendEvent::About(about(&sdk)));
+                    crate::timing::mark("update check finished");
                 });
             }
             // Give apps the PC's position: the emulator's default GPS fix is
             // an arbitrary spot in California.
             if set_location {
                 match device::pc_location().and_then(|loc| d.set_location(&loc).map(|_| loc)) {
-                    Ok(loc) => status(&format!("Location set to {}", loc.place)),
+                    Ok(loc) => {
+                        crate::timing::mark("location set");
+                        status(&format!("Location set to {}", loc.place))
+                    }
                     Err(e) => eprintln!("could not set the location: {e:#}"),
                 }
             }
@@ -366,6 +378,7 @@ impl Core {
     fn on_bridge(&mut self, msg: FromBridge) {
         match msg {
             FromBridge::Hello { home, device, sdk } => {
+                crate::timing::mark("connected: bridge said hello");
                 self.connected = true;
                 self.home_package = home;
                 self.status = format!(
@@ -421,6 +434,9 @@ impl Core {
     }
 
     fn on_snapshot(&mut self, snap: Snapshot) {
+        if self.model.windows.is_empty() {
+            crate::timing::mark("first Android screen received");
+        }
         if crate::debug_enabled()
             && let Ok(json) = serde_json::to_string(&snap)
         {

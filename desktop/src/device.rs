@@ -341,11 +341,15 @@ pub fn start(sdk: PathBuf, opts: &StartOptions, status: &dyn Fn(&str)) -> Result
 
     if device_state(&sdk, &serial).as_deref() == Some("device") {
         status("Resuming Android");
+        crate::timing::mark("emulator was paused or running: resuming");
         // Harmless if it is already running.
         let _ = adb(&sdk, Some(&serial), &["emu", "avd", "start"]);
     } else {
         ensure_avd(&sdk)?;
         status("Starting Android");
+        crate::timing::mark(
+            "emulator not running: starting it (Quick Boot snapshot, or cold boot)",
+        );
         let mut cmd = Command::new(sdk.join("emulator").join(format!("emulator{EXE}")));
         cmd.args([
             "-avd",
@@ -371,6 +375,7 @@ pub fn start(sdk: PathBuf, opts: &StartOptions, status: &dyn Fn(&str)) -> Result
 
     let device = Device { sdk, serial };
     wait_for_boot(&device, opts.boot_timeout, status)?;
+    crate::timing::mark("Android boot completed");
     Ok(device)
 }
 
@@ -519,17 +524,30 @@ fn ensure_bridge_once(d: &Device, status: &dyn Fn(&str)) -> Result<()> {
     }
 
     // On a brand-new Android, first-boot setup can reset accessibility
-    // settings right after we set them, so check the bridge actually runs.
-    for attempt in 0..10 {
-        if bridge_bound(d) {
+    // settings right after we set them, so check the bridge actually runs:
+    // poll often, re-enable it at most every few seconds, stop once it runs.
+    let started = Instant::now();
+    let mut last_enable: Option<Instant> = None;
+    let mut announced = false;
+    while !bridge_bound(d) {
+        if last_enable.is_none_or(|t| t.elapsed() > Duration::from_secs(5)) {
+            enable_bridge_service(d)?;
+            last_enable = Some(Instant::now());
+        }
+        if started.elapsed() > Duration::from_secs(30) {
+            crate::timing::mark("bridge still not running after 30 s; continuing anyway");
             break;
         }
-        enable_bridge_service(d)?;
-        std::thread::sleep(Duration::from_secs(3));
-        if attempt == 2 {
+        if !announced && started.elapsed() > Duration::from_secs(6) {
             status("Waiting for Android to finish setting up");
+            announced = true;
         }
+        std::thread::sleep(Duration::from_millis(500));
     }
+    crate::timing::mark(&format!(
+        "bridge running (checked for {:.1} s)",
+        started.elapsed().as_secs_f64()
+    ));
     adb(
         &d.sdk,
         Some(&d.serial),
@@ -599,6 +617,16 @@ fn enable_bridge_service(d: &Device) -> Result<()> {
     Ok(())
 }
 
+/// Whether `dumpsys accessibility` output lists the bridge as bound. The
+/// list may wrap onto following lines, depending on the Android version, so
+/// the whole section is searched.
+fn bridge_in_bound_services(dumpsys: &str) -> bool {
+    dumpsys.split("Bound services").skip(1).any(|rest| {
+        let section = rest.split("Enabled services").next().unwrap_or(rest);
+        section.contains(BRIDGE_PACKAGE) || section.contains("Dromaius Bridge")
+    })
+}
+
 /// Whether Android has started the bridge service.
 fn bridge_bound(d: &Device) -> bool {
     adb(
@@ -606,10 +634,7 @@ fn bridge_bound(d: &Device) -> bool {
         Some(&d.serial),
         &["shell", "dumpsys", "accessibility"],
     )
-    .is_ok_and(|out| {
-        out.lines()
-            .any(|l| l.contains("Bound services") && l.contains("Dromaius Bridge"))
-    })
+    .is_ok_and(|out| bridge_in_bound_services(&out))
 }
 
 impl Device {
@@ -835,6 +860,24 @@ pub fn package_from_link(link: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::package_from_link;
+
+    #[test]
+    fn detects_bound_bridge() {
+        use super::bridge_in_bound_services as bound;
+        let one_line =
+            "  Bound services:{Service[label=Dromaius Bridge, feedbackType[FEEDBACK_SPOKEN]]}
+  Enabled services:{{com.dromaius.bridge/com.dromaius.bridge.BridgeService}}";
+        let wrapped = "  Bound services:{
+    Service[label=Dromaius Bridge,
+      feedbackType[FEEDBACK_SPOKEN]]
+  }
+  Enabled services:{}";
+        let only_enabled = "  Bound services:{}
+  Enabled services:{{com.dromaius.bridge/com.dromaius.bridge.BridgeService}}";
+        assert!(bound(one_line));
+        assert!(bound(wrapped));
+        assert!(!bound(only_enabled), "enabled but not yet bound");
+    }
 
     #[test]
     fn parses_links() {

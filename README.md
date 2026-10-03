@@ -114,6 +114,10 @@ The Rust tests cover the Android tree simplification and setup logic; the
 
 ### Debugging
 
+- Every start writes `%LOCALAPPDATA%\Dromaius\startup.log` with the time of
+  each step (emulator resume or boot, bridge, first screen, location, update
+  check), so slow starts can be attributed.
+
 - `DROMAIUS_SDK_DIR` and `ANDROID_AVD_HOME` point Dromaius at other folders,
   e.g. empty ones to test first-run setup without touching your real setup.
 - `DROMAIUS_DEBUG=1` saves every Android snapshot to

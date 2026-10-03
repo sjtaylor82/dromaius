@@ -8,6 +8,8 @@ elements list and say all, and typing goes into normal edit fields.
 
 This is an early hobby release. Please report problems at
 https://github.com/sjtaylor82/dromaius/issues
+If starting is slow, please include %LOCALAPPDATA%\Dromaius\startup.log,
+which records how long each step took.
 
 
 WHAT YOU NEED

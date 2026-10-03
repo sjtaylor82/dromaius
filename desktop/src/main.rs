@@ -6,6 +6,7 @@ mod device;
 mod mirror;
 mod protocol;
 mod setup;
+mod timing;
 mod view;
 
 use std::path::PathBuf;
@@ -154,6 +155,7 @@ fn main() {
         }
     };
     let mut opts = Some(opts);
+    timing::start();
 
     tauri::Builder::default()
         .setup(move |app| {
