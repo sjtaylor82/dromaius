@@ -58,7 +58,8 @@ location), `--mock <snapshot.json>` (render a saved screen without Android).
 
 - Windows 10/11 64-bit with hardware virtualization and the **Windows Hypervisor
   Platform** feature enabled (macOS support is planned)
-- 8 GB RAM (16 GB recommended), about 10 GB free disk space
+- 8 GB RAM (16 GB recommended), about 12 GB free disk space: Android itself
+  is about 4 GB, its quick-start snapshot about 4 GB, plus your apps
 - An internet connection for the first start. Dromaius then downloads Android
   from Google (about 2.8 GB; 4 GB on disk) into `%LOCALAPPDATA%\Dromaius\sdk`,
   after you accept Google's licence. No Java or developer tools are needed.

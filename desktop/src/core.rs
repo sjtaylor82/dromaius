@@ -17,8 +17,11 @@ use crate::view::{self, ViewNode};
 
 pub enum BackendEvent {
     Setup(SetupPayload),
+    About(AboutPayload),
     LicenseRequest {
         text: String,
+        android: String,
+        items: Vec<(String, u64)>,
         download_bytes: u64,
         reply: Sender<bool>,
     },
@@ -69,6 +72,9 @@ pub enum SetupPayload {
     License {
         text: String,
         download_mb: u64,
+        android: String,
+        /// Each download with its size in MB.
+        items: Vec<(String, u64)>,
     },
     #[serde(rename_all = "camelCase")]
     Downloading {
@@ -89,8 +95,24 @@ pub enum SetupPayload {
     Done,
 }
 
+/// Versions in use, and available updates, for the About section.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AboutPayload {
+    pub dromaius: String,
+    pub android: Option<String>,
+    pub emulator: Option<String>,
+    pub sdk: String,
+    /// Disk space used by the Android files (emulator and system).
+    pub sdk_size: Option<String>,
+    /// Disk space used by the virtual device's data (apps, sign-ins).
+    pub data_size: Option<String>,
+    pub updates: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct InitPayload {
+    pub about: Option<AboutPayload>,
     pub setup: Option<SetupPayload>,
     pub state: StatePayload,
     pub apps: Vec<AppInfo>,
@@ -126,6 +148,7 @@ pub struct Core {
     last_screen: Option<ScreenPayload>,
     setup: Option<SetupPayload>,
     license_reply: Option<Sender<bool>>,
+    about: Option<AboutPayload>,
 }
 
 impl Core {
@@ -150,6 +173,7 @@ impl Core {
             last_screen: None,
             setup: None,
             license_reply: None,
+            about: None,
         }
     }
 
@@ -180,6 +204,7 @@ impl Core {
                 Some(sdk) => Ok(sdk),
                 None => run_setup(&events),
             };
+            let sdk_dir = sdk.as_ref().ok().cloned();
             let result = sdk
                 .and_then(|sdk| {
                     device::start(
@@ -199,6 +224,9 @@ impl Core {
                     Err(e) => eprintln!("could not set the location: {e:#}"),
                 }
             }
+            if let (Ok(_), Some(sdk)) = (&result, &sdk_dir) {
+                let _ = events.send(BackendEvent::About(about(sdk)));
+            }
             let _ = events.send(match result {
                 Ok(d) => BackendEvent::DeviceReady(d),
                 Err(e) => BackendEvent::DeviceFailed(format!("{e:#}")),
@@ -209,6 +237,7 @@ impl Core {
     pub fn init_payload(&self) -> InitPayload {
         InitPayload {
             setup: self.setup.clone(),
+            about: self.about.clone(),
             state: self.state(),
             apps: self.apps.clone(),
             screen: self.last_screen.clone(),
@@ -264,14 +293,22 @@ impl Core {
                 let _ = self.app.emit("setup", &payload);
                 self.setup = Some(payload);
             }
+            BackendEvent::About(about) => {
+                let _ = self.app.emit("about", &about);
+                self.about = Some(about);
+            }
             BackendEvent::LicenseRequest {
                 text,
+                android,
+                items,
                 download_bytes,
                 reply,
             } => {
                 self.license_reply = Some(reply);
                 let payload = SetupPayload::License {
                     text,
+                    android,
+                    items,
                     download_mb: download_bytes / 1_000_000,
                 };
                 let _ = self.app.emit("setup", &payload);
@@ -301,7 +338,10 @@ impl Core {
             FromBridge::Hello { home, device, sdk } => {
                 self.connected = true;
                 self.home_package = home;
-                self.status = format!("Connected to {device}, Android API {sdk}");
+                self.status = format!(
+                    "Connected to {} on {device}",
+                    crate::setup::android_name(&sdk.to_string())
+                );
                 self.emit_state();
                 if let Some(link) = self.opts.install.take() {
                     self.install_link(&link);
@@ -644,9 +684,34 @@ fn run_setup(events: &Sender<BackendEvent>) -> anyhow::Result<std::path::PathBuf
     let plan = setup::plan(&sdk)
         .map_err(|e| fail(format!("Could not reach Google's download server: {e:#}")))?;
 
+    // Check what we can before downloading anything.
+    if !setup::hypervisor_platform_installed() {
+        let message = virtualization_help("Windows Hypervisor Platform is not turned on");
+        send(SetupPayload::Virtualization { message });
+        anyhow::bail!("Windows Hypervisor Platform is not turned on");
+    }
+    let _ = std::fs::create_dir_all(&sdk);
+    if let Some(free) = setup::free_space(&sdk) {
+        let needed = setup::space_needed(&plan);
+        if free < needed {
+            return Err(fail(format!(
+                "Installing Android needs about {:.1} GB of free disk space on the drive holding {}, but only {:.1} GB is free. Free up some space, then open Dromaius again.",
+                needed as f64 / 1e9,
+                sdk.display(),
+                free as f64 / 1e9
+            )));
+        }
+    }
+
     let (reply, answer) = std::sync::mpsc::channel();
     let _ = events.send(BackendEvent::LicenseRequest {
         text: plan.license_text.clone(),
+        android: plan.android.clone().unwrap_or_else(|| "Android".into()),
+        items: plan
+            .downloads
+            .iter()
+            .map(|d| (d.label.to_string(), d.size / 1_000_000))
+            .collect(),
         download_bytes: plan.total_bytes(),
         reply,
     });
@@ -696,4 +761,74 @@ fn virtualization_help(detail: &str) -> String {
         "Android needs hardware virtualization, which this computer doesn't seem to provide."
     };
     format!("{fix} Then open Dromaius again. (Emulator said: {detail})")
+}
+
+/// Versions in use and any newer stable releases from Google.
+fn about(sdk: &std::path::Path) -> AboutPayload {
+    use crate::setup;
+    let platform = device::avd_platform();
+    let v = setup::versions(sdk, platform.as_deref());
+    let own = sdk == setup::own_sdk_dir();
+    let mut updates = Vec::new();
+    if let Some((name, size)) = &v.newer_android {
+        updates.push(format!(
+            "A newer Android is available: {name} ({:.1} GB download).",
+            *size as f64 / 1e9
+        ));
+    }
+    if let Some(rev) = &v.newer_emulator {
+        updates.push(if own {
+            format!("A newer Android emulator is available: version {rev}.")
+        } else {
+            format!("A newer Android emulator is available: version {rev}. Update it with Android Studio's SDK Manager.")
+        });
+    }
+    AboutPayload {
+        dromaius: env!("CARGO_PKG_VERSION").into(),
+        android: platform.map(|p| format!("{} with Google Play", setup::android_name(&p))),
+        emulator: v.emulator,
+        sdk: sdk.display().to_string(),
+        sdk_size: own.then(|| size_text(dir_size(sdk))),
+        data_size: device::avd_dir().map(|d| {
+            let snapshots = dir_size(&d.join("snapshots"));
+            format!(
+                "{} for apps and data, plus {} for the quick-start snapshot",
+                size_text(dir_size(&d).saturating_sub(snapshots)),
+                size_text(snapshots)
+            )
+        }),
+        updates,
+    }
+}
+
+/// Total size of the files under `dir`.
+fn dir_size(dir: &std::path::Path) -> u64 {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| match e.metadata() {
+            Ok(m) if m.is_dir() => dir_size(&e.path()),
+            Ok(m) => m.len(),
+            Err(_) => 0,
+        })
+        .sum()
+}
+
+fn size_text(bytes: u64) -> String {
+    if bytes >= 1_000_000_000 {
+        format!("{:.1} GB", bytes as f64 / 1e9)
+    } else {
+        format!("{} MB", bytes / 1_000_000)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    #[ignore = "needs internet and an installed SDK"]
+    fn reports_versions() {
+        let sdk = crate::device::find_sdk().expect("an SDK");
+        println!("{:#?}", super::about(&sdk));
+    }
 }

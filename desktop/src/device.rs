@@ -123,6 +123,29 @@ fn newest_play_image(sdk: &Path) -> Result<(String, String)> {
 }
 
 /// Writes the AVD definition directly (what avdmanager would do), so no JDK is needed.
+/// The virtual device's folder (its disk images and data).
+pub fn avd_dir() -> Option<PathBuf> {
+    Some(avd_home().ok()?.join(format!("{}.avd", avd_name())))
+}
+
+/// The Android release the virtual device runs, e.g. "android-37.0".
+pub fn avd_platform() -> Option<String> {
+    let config = std::fs::read_to_string(
+        avd_home()
+            .ok()?
+            .join(format!("{}.avd", avd_name()))
+            .join("config.ini"),
+    )
+    .ok()?;
+    let sysdir = config
+        .lines()
+        .find_map(|l| l.strip_prefix("image.sysdir.1="))?;
+    sysdir
+        .split(['/', '\\'])
+        .find(|part| part.starts_with("android-"))
+        .map(str::to_string)
+}
+
 /// The virtual device to use: an existing legacy one, otherwise ours.
 fn avd_name() -> &'static str {
     let legacy = avd_home().map(|h| h.join(format!("{LEGACY_AVD_NAME}.ini")).exists());

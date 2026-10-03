@@ -107,6 +107,8 @@ pub struct Plan {
     pub downloads: Vec<Download>,
     pub license_id: String,
     pub license_text: String,
+    /// The Android release that will be installed, e.g. "Android 17 (API 37)".
+    pub android: Option<String>,
 }
 
 impl Plan {
@@ -138,8 +140,17 @@ fn tar() -> &'static str {
     if cfg!(windows) { "tar.exe" } else { "tar" }
 }
 
+/// One downloadable package version, from Google's repository.
+struct Archive {
+    url: String,
+    sha1: String,
+    size: u64,
+    license: String,
+    revision: String,
+}
+
 /// The stable-channel archive of a package for this host.
-fn find_archive(doc: &roxmltree::Document, path: &str) -> Option<(String, String, u64, String)> {
+fn find_archive(doc: &roxmltree::Document, path: &str) -> Option<Archive> {
     let stable = doc
         .descendants()
         .find(|n| n.has_tag_name("channel") && n.text() == Some("stable"))
@@ -157,6 +168,21 @@ fn find_archive(doc: &roxmltree::Document, path: &str) -> Option<(String, String
         .and_then(|n| n.attribute("ref"))
         .unwrap_or("android-sdk-license")
         .to_string();
+    let revision = package
+        .children()
+        .find(|n| n.has_tag_name("revision"))
+        .map(|r| {
+            ["major", "minor", "micro"]
+                .iter()
+                .filter_map(|t| {
+                    r.children()
+                        .find(|n| n.has_tag_name(*t))
+                        .and_then(|n| n.text())
+                })
+                .collect::<Vec<_>>()
+                .join(".")
+        })
+        .unwrap_or_default();
     let archive = package
         .descendants()
         .filter(|n| n.has_tag_name("archive"))
@@ -173,12 +199,34 @@ fn find_archive(doc: &roxmltree::Document, path: &str) -> Option<(String, String
             .and_then(|n| n.text())
             .map(str::to_string)
     };
-    Some((
-        text("url")?,
-        text("checksum")?,
-        text("size")?.parse().ok()?,
+    Some(Archive {
+        url: text("url")?,
+        sha1: text("checksum")?,
+        size: text("size")?.parse().ok()?,
         license,
-    ))
+        revision,
+    })
+}
+
+/// The newest stable Google Play image for this CPU, as (platform, archive).
+fn newest_image(images: &roxmltree::Document) -> Option<(String, Archive)> {
+    let suffix = format!(";google_apis_playstore;{}", image_abi());
+    let mut candidates: Vec<(Vec<u32>, String)> = images
+        .descendants()
+        .filter(|n| n.has_tag_name("remotePackage"))
+        .filter_map(|n| {
+            let path = n.attribute("path")?;
+            let platform = path
+                .strip_prefix("system-images;")?
+                .strip_suffix(suffix.as_str())?;
+            Some((parse_version(platform)?, path.to_string()))
+        })
+        .collect();
+    candidates.sort();
+    candidates.iter().rev().find_map(|(_, path)| {
+        let platform = path.split(';').nth(1)?.to_string();
+        find_archive(images, path).map(|a| (platform, a))
+    })
 }
 
 fn license_text(doc: &roxmltree::Document, id: &str) -> Option<String> {
@@ -186,6 +234,23 @@ fn license_text(doc: &roxmltree::Document, id: &str) -> Option<String> {
         .find(|n| n.has_tag_name("license") && n.attribute("id") == Some(id))
         .and_then(|n| n.text())
         .map(|t| t.trim().to_string())
+}
+
+/// "android-37.0" or "37" -> "Android 17 (API 37)". Since API 33 (Android
+/// 13), the Android version is the API level minus 20.
+pub fn android_name(platform_or_api: &str) -> String {
+    let api = platform_or_api.trim_start_matches("android-");
+    let major: u32 = api
+        .split('.')
+        .next()
+        .and_then(|m| m.parse().ok())
+        .unwrap_or(0);
+    let api = api.trim_end_matches(".0");
+    if major >= 33 {
+        format!("Android {} (API {api})", major - 20)
+    } else {
+        format!("Android API {api}")
+    }
 }
 
 /// Works out what needs downloading into `sdk`.
@@ -202,61 +267,43 @@ pub fn plan(sdk: &Path) -> Result<Plan> {
         if sdk.join(path).join(format!("{exe}{EXE}")).exists() {
             continue;
         }
-        let (url, sha1, size, license) = find_archive(&repo, path)
+        let a = find_archive(&repo, path)
             .ok_or_else(|| anyhow!("{path} not found in Google's package list"))?;
-        if license != "android-sdk-license" {
-            license_id = license;
+        if a.license != "android-sdk-license" {
+            license_id = a.license;
         }
         downloads.push(Download {
             label,
-            url: format!("{REPO}{url}"),
-            sha1,
-            size,
+            url: format!("{REPO}{}", a.url),
+            sha1: a.sha1,
+            size: a.size,
             dest: sdk.join(path),
         });
     }
 
     let mut license_text_value = license_text(&repo, &license_id);
-    if installed_image(sdk).is_none() {
+    let mut android = installed_image(sdk);
+    if android.is_none() {
         let img_xml = fetch_text(&format!("{PLAY_IMAGES}sys-img2-3.xml"))?;
         let images = roxmltree::Document::parse(&img_xml).context("reading Google's image list")?;
-        // Newest stable "system-images;android-N;google_apis_playstore;<abi>".
-        let suffix = format!(";google_apis_playstore;{}", image_abi());
-        let mut candidates: Vec<(Vec<u32>, String)> = images
-            .descendants()
-            .filter(|n| n.has_tag_name("remotePackage"))
-            .filter_map(|n| {
-                let path = n.attribute("path")?;
-                let platform = path
-                    .strip_prefix("system-images;")?
-                    .strip_suffix(suffix.as_str())?;
-                Some((parse_version(platform)?, path.to_string()))
-            })
-            .collect();
-        candidates.sort();
-        let (url, sha1, size, license, path) = candidates
-            .iter()
-            .rev()
-            .find_map(|(_, path)| {
-                find_archive(&images, path).map(|(u, s, z, l)| (u, s, z, l, path.clone()))
-            })
+        let (platform, a) = newest_image(&images)
             .ok_or_else(|| anyhow!("no Google Play system image available for {}", image_abi()))?;
-        let platform = path.split(';').nth(1).unwrap_or_default();
-        if license != license_id {
-            license_text_value = license_text(&images, &license).or(license_text_value);
-            license_id = license;
+        if a.license != license_id {
+            license_text_value = license_text(&images, &a.license).or(license_text_value);
+            license_id = a.license;
         }
         downloads.push(Download {
             label: "Android system (Google Play)",
-            url: format!("{PLAY_IMAGES}{url}"),
-            sha1,
-            size,
+            url: format!("{PLAY_IMAGES}{}", a.url),
+            sha1: a.sha1,
+            size: a.size,
             dest: sdk
                 .join("system-images")
-                .join(platform)
+                .join(&platform)
                 .join("google_apis_playstore")
                 .join(image_abi()),
         });
+        android = Some(platform);
     }
 
     let license_text =
@@ -265,7 +312,60 @@ pub fn plan(sdk: &Path) -> Result<Plan> {
         downloads,
         license_id,
         license_text,
+        android: android.map(|p| android_name(&p)),
     })
+}
+
+fn package_revision(dir: &Path) -> Option<String> {
+    let props = std::fs::read_to_string(dir.join("source.properties")).ok()?;
+    props
+        .lines()
+        .find_map(|l| l.strip_prefix("Pkg.Revision="))
+        .map(|r| r.trim().to_string())
+}
+
+fn newer(candidate: &str, current: &str) -> bool {
+    let parse = |v: &str| {
+        v.split('.')
+            .map(|p| p.parse::<u32>().unwrap_or(0))
+            .collect::<Vec<_>>()
+    };
+    parse(candidate) > parse(current)
+}
+
+/// Installed versions, and any newer stable versions Google offers.
+#[derive(Debug, Clone, Default)]
+pub struct Versions {
+    pub emulator: Option<String>,
+    pub newer_emulator: Option<String>,
+    /// Newest Android release offered, with its download size, when newer
+    /// than the one in use.
+    pub newer_android: Option<(String, u64)>,
+}
+
+/// Compares what's installed in `sdk` (and the Android release `in_use`,
+/// e.g. "android-37.0") with Google's newest stable releases.
+pub fn versions(sdk: &Path, in_use: Option<&str>) -> Versions {
+    let mut v = Versions {
+        emulator: package_revision(&sdk.join("emulator")),
+        ..Default::default()
+    };
+    if let Ok(xml) = fetch_text(&format!("{REPO}repository2-3.xml"))
+        && let Ok(repo) = roxmltree::Document::parse(&xml)
+        && let (Some(a), Some(current)) = (find_archive(&repo, "emulator"), v.emulator.as_deref())
+        && newer(&a.revision, current)
+    {
+        v.newer_emulator = Some(a.revision);
+    }
+    if let Ok(xml) = fetch_text(&format!("{PLAY_IMAGES}sys-img2-3.xml"))
+        && let Ok(images) = roxmltree::Document::parse(&xml)
+        && let Some((platform, a)) = newest_image(&images)
+        && let Some(current) = in_use.and_then(parse_version)
+        && parse_version(&platform).is_some_and(|p| p > current)
+    {
+        v.newer_android = Some((android_name(&platform), a.size));
+    }
+    v
 }
 
 /// Records licence acceptance the way sdkmanager does (a hash of the text).
@@ -382,6 +482,67 @@ fn sha1_file(path: &Path) -> Result<String> {
     Ok(hasher.digest().to_string())
 }
 
+/// Disk space needed: the downloads, their unpacked contents, and room for
+/// the first Quick Boot snapshot (about the size of Android's 4 GB of memory).
+pub fn space_needed(plan: &Plan) -> u64 {
+    plan.total_bytes() * 5 / 2 + 4_000_000_000
+}
+
+/// Free space available on the drive holding `dir` (or its nearest existing parent).
+pub fn free_space(dir: &Path) -> Option<u64> {
+    let existing = dir.ancestors().find(|p| p.exists())?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let wide: Vec<u16> = existing.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut free = 0u64;
+        // SAFETY: `wide` is a NUL-terminated path that outlives the call.
+        unsafe {
+            windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+                windows::core::PCWSTR(wide.as_ptr()),
+                Some(&mut free),
+                None,
+                None,
+            )
+            .ok()?;
+        }
+        Some(free)
+    }
+    #[cfg(not(windows))]
+    {
+        let out = Command::new("df")
+            .args(["-Pk"])
+            .arg(existing)
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        let kb: u64 = text
+            .lines()
+            .nth(1)?
+            .split_whitespace()
+            .nth(3)?
+            .parse()
+            .ok()?;
+        Some(kb * 1024)
+    }
+}
+
+/// Quick check, before downloading anything, that Windows' hypervisor
+/// platform is installed (the emulator needs it). The definitive check is
+/// `check_acceleration`, once the emulator is downloaded.
+pub fn hypervisor_platform_installed() -> bool {
+    #[cfg(windows)]
+    {
+        let root = std::env::var_os("SystemRoot")
+            .map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+        root.join("System32").join("WinHvPlatform.dll").exists()
+    }
+    #[cfg(not(windows))]
+    {
+        true
+    }
+}
+
 /// Checks that the emulator can use hardware virtualization. Returns the
 /// emulator's explanation when it can't.
 pub fn check_acceleration(sdk: &Path) -> Result<(), String> {
@@ -402,6 +563,15 @@ pub fn check_acceleration(sdk: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn names_and_versions() {
+        assert_eq!(super::android_name("android-37.0"), "Android 17 (API 37)");
+        assert_eq!(super::android_name("36"), "Android 16 (API 36)");
+        assert_eq!(super::android_name("android-36.1"), "Android 16 (API 36.1)");
+        assert!(super::newer("37.3.1", "37.2.12"));
+        assert!(!super::newer("37.2.12", "37.2.12"));
+    }
+
     #[test]
     fn versions() {
         assert_eq!(super::parse_version("android-37.0"), Some(vec![37, 0]));

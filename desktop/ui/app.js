@@ -488,9 +488,17 @@ function renderSetup(setup) {
     case 'license': {
       const gb = (setup.downloadMb / 1000).toFixed(1);
       setText(message, 'Android needs to be installed before first use.');
-      setText($('license-intro'),
-        `Dromaius will download Android from Google: about ${gb} GB, which needs about ${Math.ceil(gb * 2.5)} GB of free disk space. ` +
-        'Google requires you to accept its licence first. The licence text follows, then Accept and Decline buttons.');
+      setText($('license-intro'), `Dromaius will download ${setup.android} with Google Play from Google, ${gb} GB in total:`);
+      $('license-items').replaceChildren(...setup.items.map(([label, mb]) => {
+        const li = document.createElement('li');
+        li.textContent = `${label}: ${mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `${mb} MB`}`;
+        return li;
+      }));
+      setText($('license-space'),
+        `You need about ${Math.ceil(gb * 2.5)} GB of free disk space while installing. Afterwards Android uses about ` +
+        `${Math.ceil(gb * 1.5)} GB, plus about 4 GB for the snapshot that lets it start in seconds, plus the apps you install. ` +
+        'Google requires you to accept its licence first. ' +
+        'The licence text follows, then Accept and Decline buttons.');
       if (!$('license-text').textContent) {
         $('license-text').replaceChildren(...setup.text.split(/\n\s*\n/).map((para) => {
           const p = document.createElement('p');
@@ -541,6 +549,32 @@ $('license-decline').addEventListener('click', () => {
   $('setup-license').hidden = true;
 });
 
+// ------------------------------------------------------------------ versions
+
+function renderAbout(about) {
+  const rows = [
+    ['Dromaius', about.dromaius],
+    ['Android', about.android || 'Unknown'],
+    ['Android emulator', about.emulator ? `Version ${about.emulator}` : 'Unknown'],
+    ['Android files', about.sdkSize ? `${about.sdk} (${about.sdkSize})` : about.sdk],
+    ['Your Android data', about.dataSize || 'Unknown'],
+    ['Updates', about.updates.length ? about.updates.join(' ') : 'Everything is up to date'],
+  ];
+  $('about-list').replaceChildren(...rows.flatMap(([term, value]) => {
+    const dt = document.createElement('dt');
+    dt.textContent = term;
+    const dd = document.createElement('dd');
+    dd.textContent = value;
+    return [dt, dd];
+  }));
+  $('update-notice').hidden = about.updates.length === 0;
+  $('update-list').replaceChildren(...about.updates.map((text) => {
+    const li = document.createElement('li');
+    li.textContent = text;
+    return li;
+  }));
+}
+
 function applyState(state) {
   setText($('status'), state.status);
   setText($('starting-message'), state.status);
@@ -554,8 +588,10 @@ async function start() {
   await listen('apps', (e) => renderApps(e.payload));
   await listen('screen', (e) => renderScreen(e.payload));
   await listen('setup', (e) => renderSetup(e.payload));
+  await listen('about', (e) => renderAbout(e.payload));
   const init = await tauri.core.invoke('init');
   if (init.setup) renderSetup(init.setup);
+  if (init.about) renderAbout(init.about);
   renderApps(init.apps);
   if (init.screen) lastScreen = init.screen;
   applyState(init.state);
