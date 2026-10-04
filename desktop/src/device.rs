@@ -395,6 +395,12 @@ pub fn start(sdk: PathBuf, opts: &StartOptions, status: &dyn Fn(&str)) -> Result
     let device = Device { sdk, serial };
     wait_for_boot(&device, timeout, status, emulator.as_mut())?;
     crate::timing::mark("Android boot completed");
+    // Android's clock stops while the emulator is paused; a clock hours
+    // behind makes Google sign-in tokens fail ("Authentication is required").
+    match device.sync_clock() {
+        Ok(drift) => crate::timing::mark(&format!("Android clock corrected (was {drift} s off)")),
+        Err(e) => crate::timing::mark(&format!("could not correct Android's clock: {e:#}")),
+    }
     Ok(device)
 }
 
@@ -842,6 +848,58 @@ impl Device {
             ],
         )
         .map(|_| ())
+    }
+
+    /// Seconds Android's clock differs from the PC's (positive: Android behind).
+    fn clock_drift(&self) -> Result<i64> {
+        let android: i64 = adb(&self.sdk, Some(&self.serial), &["shell", "date", "+%s"])?
+            .trim()
+            .parse()
+            .context("reading Android's clock")?;
+        let pc = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs() as i64;
+        Ok(pc - android)
+    }
+
+    /// Sets Android's clock to the PC's when it is more than a few seconds
+    /// off. Returns how far off it was.
+    pub fn sync_clock(&self) -> Result<i64> {
+        let drift = self.clock_drift()?;
+        if drift.abs() < 5 {
+            return Ok(drift);
+        }
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis()
+            .to_string();
+        let set = adb(
+            &self.sdk,
+            Some(&self.serial),
+            &["shell", "cmd", "alarm", "set-time", &now_ms],
+        );
+        if set.is_err() || self.clock_drift()?.abs() >= 5 {
+            // Fall back to Android fetching network time itself.
+            let _ = adb(
+                &self.sdk,
+                Some(&self.serial),
+                &[
+                    "shell",
+                    "cmd",
+                    "network_time_update_service",
+                    "force_refresh",
+                ],
+            );
+            std::thread::sleep(Duration::from_secs(2));
+            let left = self.clock_drift()?;
+            if left.abs() >= 5 {
+                bail!(
+                    "still {left} s off after correcting (set-time: {:?})",
+                    set.err().map(|e| e.to_string())
+                );
+            }
+        }
+        Ok(drift)
     }
 
     /// Stops an app (it restarts the next time it's used).
