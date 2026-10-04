@@ -428,3 +428,13 @@ test('F7 finds and holds the on-screen push-to-talk control', async () => {
   press(w, { key: 'F7' });
   assert.deepEqual(calls.at(-1), ['release', undefined]);
 });
+
+test('F7 holds WhatsApp-style voice message buttons, even when not marked tappable', async () => {
+  const { w, screen, calls } = await load();
+  screen([
+    { id: 'c', kind: 'button', label: 'Camera', clickable: true },
+    { id: 'v', kind: 'image', label: 'Voice message' },
+  ]);
+  press(w, { key: 'F7' });
+  assert.deepEqual(calls.at(-1), ['act', { id: 'v', action: 'touchDown' }]);
+});

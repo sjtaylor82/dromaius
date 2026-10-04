@@ -743,22 +743,33 @@ function currentNode() {
 // on-screen push-to-talk control and holds it down until the next F7; with no
 // such control it holds Android's hardware PTT key (F12) instead, which apps
 // such as Zello let you assign as their PTT button.
-const PTT_LABELS = [/push[\s-]*to[\s-]*talk/i, /hold[\s-]*to[\s-]*talk/i, /ptt/i, /^talk$/i, /talk/i, /transmit/i];
+// Push-to-talk apps, then voice-message buttons (WhatsApp, Messenger), which
+// also record while held and send on release.
+const PTT_LABELS = [
+  /push[\s-]*to[\s-]*talk/i, /hold[\s-]*to[\s-]*talk/i, /ptt/i, /^talk$/i,
+  /hold[\s-]*to[\s-]*record/i, /voice[\s-]*message/i, /voice[\s-]*clip/i, /voice[\s-]*note/i,
+  /talk/i, /transmit/i, /record[\s-]*(audio|voice)/i,
+];
 let talking = null;
 
 /** The best push-to-talk control on the current screen, if any. */
 function findPttControl() {
-  const candidates = [];
+  // Prefer controls marked tappable, but record buttons are often custom
+  // views that only react to touch, so consider everything as a fallback.
+  const all = [];
   const walk = (nodes) => {
     for (const n of nodes || []) {
-      if (n.clickable || n.longClickable) candidates.push(n);
+      all.push(n);
       walk(n.children);
     }
   };
   walk(lastScreen?.nodes);
-  for (const pattern of PTT_LABELS) {
-    const hit = candidates.find((n) => pattern.test(n.label || ''));
-    if (hit) return hit;
+  const tappable = all.filter((n) => n.clickable || n.longClickable);
+  for (const pool of [tappable, all]) {
+    for (const pattern of PTT_LABELS) {
+      const hit = pool.find((n) => pattern.test(n.label || ''));
+      if (hit) return hit;
+    }
   }
   return null;
 }
