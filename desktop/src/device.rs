@@ -873,7 +873,120 @@ pub fn pc_location() -> Result<Location> {
         Ok(loc) => return Ok(loc),
         Err(e) => eprintln!("Windows location unavailable, using IP address: {e:#}"),
     }
+    #[cfg(target_os = "macos")]
+    match mac_location() {
+        Ok(loc) => return Ok(loc),
+        Err(e) => eprintln!("macOS location unavailable, using IP address: {e:#}"),
+    }
     ip_location()
+}
+
+/// The Mac's position from Location Services (Wi-Fi based, usually street
+/// level). macOS asks the user for permission the first time.
+#[cfg(target_os = "macos")]
+fn mac_location() -> Result<Location> {
+    use std::cell::RefCell;
+    use std::sync::mpsc;
+
+    use dispatch2::DispatchQueue;
+    use objc2::rc::Retained;
+    use objc2_core_location::{
+        CLAuthorizationStatus, CLLocationManager, kCLLocationAccuracyHundredMeters,
+    };
+
+    thread_local! {
+        // CoreLocation delivers updates on the run loop of the thread that
+        // created the manager, so it lives on the main thread.
+        static MANAGER: RefCell<Option<Retained<CLLocationManager>>> = const { RefCell::new(None) };
+    }
+
+    enum Poll {
+        Waiting,
+        Denied,
+        Fix(f64, f64, f64),
+    }
+
+    DispatchQueue::main().exec_sync(|| {
+        MANAGER.with(|m| {
+            // SAFETY: runs on the main thread, as CoreLocation requires.
+            unsafe {
+                let manager = CLLocationManager::new();
+                manager.setDesiredAccuracy(kCLLocationAccuracyHundredMeters);
+                manager.requestWhenInUseAuthorization();
+                manager.startUpdatingLocation();
+                *m.borrow_mut() = Some(manager);
+            }
+        })
+    });
+
+    let poll = || {
+        let (tx, rx) = mpsc::channel();
+        DispatchQueue::main().exec_sync(move || {
+            let result = MANAGER.with(|m| {
+                let m = m.borrow();
+                let Some(manager) = m.as_ref() else {
+                    return Poll::Waiting;
+                };
+                // SAFETY: main thread; the manager is alive.
+                unsafe {
+                    let status = manager.authorizationStatus();
+                    if status == CLAuthorizationStatus::Denied
+                        || status == CLAuthorizationStatus::Restricted
+                    {
+                        return Poll::Denied;
+                    }
+                    match manager.location() {
+                        Some(loc) => {
+                            let c = loc.coordinate();
+                            Poll::Fix(c.latitude, c.longitude, loc.horizontalAccuracy())
+                        }
+                        None => Poll::Waiting,
+                    }
+                }
+            });
+            let _ = tx.send(result);
+        });
+        rx.recv().unwrap_or(Poll::Waiting)
+    };
+
+    let stop = || {
+        DispatchQueue::main().exec_sync(|| {
+            MANAGER.with(|m| {
+                if let Some(manager) = m.borrow_mut().take() {
+                    // SAFETY: main thread.
+                    unsafe { manager.stopUpdatingLocation() };
+                }
+            })
+        })
+    };
+
+    // Allow time for the user to answer macOS's permission prompt.
+    let started = Instant::now();
+    let result = loop {
+        match poll() {
+            Poll::Fix(lat, lon, accuracy) if accuracy >= 0.0 => {
+                break Ok(Location {
+                    lat,
+                    lon,
+                    place: format!(
+                        "your Mac's location, accurate to about {} metres",
+                        accuracy.round()
+                    ),
+                });
+            }
+            Poll::Denied => {
+                break Err(anyhow!(
+                    "Location Services are off or not allowed for Dromaius"
+                ));
+            }
+            _ if started.elapsed() > Duration::from_secs(30) => {
+                break Err(anyhow!("no position within 30 seconds"));
+            }
+            _ => std::thread::sleep(Duration::from_millis(500)),
+        }
+    };
+    stop();
+    result
 }
 
 #[cfg(windows)]

@@ -14,6 +14,11 @@ tauri = "2"
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = ["Devices_Geolocation", "Foundation", "Win32_Storage_FileSystem"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+dispatch2 = "0.3.1"
+objc2 = "0.6.4"
+objc2-core-location = "0.3.2"
+
 [build-dependencies]
 tauri-build = "2"
 
