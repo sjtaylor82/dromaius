@@ -685,10 +685,29 @@ impl Core {
             "collapse",
             "dismiss",
             "showOnScreen",
+            "touchDown",
         ];
         if known.contains(&action) && self.send(ToBridge::Action { id, action }).is_none() {
             self.announce("Not connected to Android");
         }
+    }
+
+    /// Lifts a finger held down for push-to-talk.
+    pub fn release(&mut self) {
+        self.send(ToBridge::Release);
+    }
+
+    /// Presses (down) or releases the hardware push-to-talk key, for apps
+    /// that let you assign a PTT button.
+    pub fn ptt_key(&mut self, down: bool) {
+        let Some(d) = self.device.clone() else {
+            return self.announce("Not connected to Android");
+        };
+        std::thread::spawn(move || {
+            if let Err(e) = d.ptt_key(down) {
+                eprintln!("push-to-talk key failed: {e:#}");
+            }
+        });
     }
 
     pub fn set_text(&mut self, id: u64, text: &str, start: usize, end: usize) {

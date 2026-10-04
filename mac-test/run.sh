@@ -189,6 +189,7 @@ cat > "$BUNDLE/Contents/Info.plist" <<'PLIST'
   <key>CFBundleShortVersionString</key><string>0.0.0-dev</string>
   <key>NSLocationWhenInUseUsageDescription</key><string>Dromaius gives Android apps your location, as a phone would.</string>
   <key>NSLocationUsageDescription</key><string>Dromaius gives Android apps your location, as a phone would.</string>
+  <key>NSMicrophoneUsageDescription</key><string>Dromaius passes your microphone to Android apps, for example for push-to-talk.</string>
 </dict>
 </plist>
 PLIST

@@ -66,6 +66,8 @@ Option+N            Android notifications (new ones are also announced)
 Option+Page Down    Next screen of items in a long Android list
 Option+Page Up      Previous screen of items in a long Android list
 Cmd+?               Keyboard help
+[                   Push to talk: press to start, press again to stop
+]                   Tap and hold (long press) the current item
 
 In edit fields, interact with the field and type. Return in a search field
 runs the search.

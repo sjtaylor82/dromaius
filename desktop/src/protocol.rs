@@ -160,6 +160,8 @@ pub mod android_action {
 /// Commands sent to the bridge.
 pub enum ToBridge<'a> {
     Refresh,
+    /// Lift a finger held down by the "touchDown" action.
+    Release,
     Apps,
     Launch(&'a str),
     Action {
@@ -187,6 +189,7 @@ impl ToBridge<'_> {
     pub fn to_json(&self, req: u64, aid: &dyn Fn(u64) -> u64) -> Value {
         match self {
             ToBridge::Refresh => json!({"type": "refresh", "req": req}),
+            ToBridge::Release => json!({"type": "release", "req": req}),
             ToBridge::Apps => json!({"type": "apps", "req": req}),
             ToBridge::Launch(package) => json!({"type": "launch", "req": req, "package": package}),
             ToBridge::Action { id, action } => {

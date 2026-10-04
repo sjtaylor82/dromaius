@@ -74,6 +74,16 @@ fn init(core: State<Shared>) -> InitPayload {
 }
 
 #[tauri::command]
+fn release(core: State<Shared>) {
+    core.lock().unwrap().release();
+}
+
+#[tauri::command]
+fn ptt_key(core: State<Shared>, down: bool) {
+    core.lock().unwrap().ptt_key(down);
+}
+
+#[tauri::command]
 fn act(core: State<Shared>, id: String, action: String) -> Result<(), String> {
     with_node(&id, |id| core.lock().unwrap().act(id, &action))
 }
@@ -212,7 +222,9 @@ fn main() {
             launch,
             install_link,
             answer_license,
-            start_update
+            start_update,
+            release,
+            ptt_key
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dromaius");

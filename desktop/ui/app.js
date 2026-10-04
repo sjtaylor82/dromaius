@@ -702,11 +702,70 @@ const SHORTCUTS = [
     mac: ['Cmd+R', (e) => e.metaKey && !e.shiftKey && e.key.toLowerCase() === 'r'],
   },
   {
+    id: 'talk', what: 'Push to talk: press once to start talking, again to stop',
+    run: () => toggleTalk(),
+    win: ['[', (e) => plainKey(e, '[')],
+    mac: ['[', (e) => plainKey(e, '[')],
+  },
+  {
+    id: 'hold', what: 'Tap and hold (long press) the current item',
+    run: () => tapAndHold(),
+    win: [']', (e) => plainKey(e, ']')],
+    mac: [']', (e) => plainKey(e, ']')],
+  },
+  {
     id: 'help', what: 'Keyboard help', run: () => $('help-dialog').showModal(),
     win: ['F1', (e) => e.key === 'F1'],
     mac: ['Cmd+?', (e) => e.metaKey && (e.key === '?' || (e.shiftKey && e.key === '/'))],
   },
 ];
+
+/** A bare key press outside edit fields (where it must type normally). */
+function plainKey(e, key) {
+  if (e.key !== key || e.ctrlKey || e.altKey || e.metaKey) return false;
+  return !e.target.closest?.('input, textarea, [contenteditable]');
+}
+
+/** The mirrored Android item the user is on, if any. */
+function currentNode() {
+  return document.activeElement?.closest?.('#screen [data-id]') || null;
+}
+
+// Push-to-talk: [ holds a finger down on the current item (e.g. a Talk
+// button) until the next [. With no item, it presses the hardware PTT key
+// (F12) instead, for apps that let you assign one.
+let talking = null;
+
+function toggleTalk() {
+  if (talking === 'touch') {
+    invoke('release');
+  } else if (talking === 'key') {
+    invoke('ptt_key', { down: false });
+  }
+  if (talking) {
+    talking = null;
+    announce('Stopped talking');
+    return;
+  }
+  const node = currentNode();
+  if (node) {
+    invoke('act', { id: node.dataset.id, action: 'touchDown' });
+    talking = 'touch';
+  } else {
+    invoke('ptt_key', { down: true });
+    talking = 'key';
+  }
+  announce('Talking');
+}
+
+function tapAndHold() {
+  const node = currentNode();
+  if (!node) {
+    announce('Move to an item first');
+    return;
+  }
+  invoke('act', { id: node.dataset.id, action: 'longClick' });
+}
 
 /** Shortcuts handled by the screen reader or browser rather than by us. */
 const OTHER_KEYS = IS_MAC

@@ -354,6 +354,7 @@ class BridgeService : AccessibilityService() {
         val result = try {
             when (cmd.optString("type")) {
                 "refresh" -> { sendSnapshot(); null }
+                "release" -> touchUp()
                 "apps" -> { sendApps(); null }
                 "launch" -> launch(cmd.getString("package"))
                 "action" -> performNodeAction(cmd)
@@ -379,6 +380,7 @@ class BridgeService : AccessibilityService() {
         return when (val action = cmd.getString("action")) {
             "click" -> clickOrTap(node, long = false)
             "longClick" -> clickOrTap(node, long = true)
+            "touchDown" -> touchDown(node)
             "focus" -> ok(node.performAction(AccessibilityNodeInfo.ACTION_FOCUS))
             "a11yFocus" -> ok(node.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS))
             // Best effort: returns false when the node is already fully visible.
@@ -445,6 +447,36 @@ class BridgeService : AccessibilityService() {
             target = target.parent
         }
         return "cannot scroll"
+    }
+
+    // A touch held down for push-to-talk, until touchUp.
+    private var held: GestureDescription.StrokeDescription? = null
+    private var heldX = 0f
+    private var heldY = 0f
+
+    /** Puts a finger down on the node and keeps it there (push-to-talk). */
+    private fun touchDown(node: AccessibilityNodeInfo): String? {
+        val r = Rect().also { node.getBoundsInScreen(it) }
+        if (r.isEmpty) return "nothing to press"
+        touchUp()
+        heldX = r.exactCenterX()
+        heldY = r.exactCenterY()
+        val path = Path().apply { moveTo(heldX, heldY) }
+        // willContinue = true: the finger stays down after this stroke.
+        val stroke = GestureDescription.StrokeDescription(path, 0, 100, true)
+        held = stroke
+        dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
+        return null
+    }
+
+    /** Lifts the finger put down by touchDown. */
+    private fun touchUp(): String? {
+        val stroke = held ?: return null
+        held = null
+        val path = Path().apply { moveTo(heldX, heldY) }
+        val end = stroke.continueStroke(path, 0, 50, false)
+        dispatchGesture(GestureDescription.Builder().addStroke(end).build(), null, null)
+        return null
     }
 
     private fun tap(x: Float, y: Float, durationMs: Long) {

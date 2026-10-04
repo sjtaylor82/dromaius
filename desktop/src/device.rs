@@ -286,6 +286,16 @@ pub fn ensure_avd(sdk: &Path) -> Result<()> {
     let ini = home.join(format!("{name}.ini"));
     let dir = home.join(format!("{name}.avd"));
     if ini.exists() && dir.join("config.ini").exists() {
+        // Devices created before push-to-talk had the microphone off.
+        let config_path = dir.join("config.ini");
+        if let Ok(config) = std::fs::read_to_string(&config_path)
+            && config.contains("hw.audioInput=no")
+        {
+            let _ = std::fs::write(
+                &config_path,
+                config.replace("hw.audioInput=no", "hw.audioInput=yes"),
+            );
+        }
         return Ok(());
     }
     let (platform, abi) = newest_play_image(sdk)?;
@@ -316,7 +326,7 @@ hw.lcd.height=2400
 hw.lcd.density=420
 hw.gpu.enabled=yes
 hw.gpu.mode=auto
-hw.audioInput=no
+hw.audioInput=yes
 hw.camera.back=none
 hw.camera.front=none
 disk.dataPartition.size=6G
@@ -367,6 +377,10 @@ pub fn start(sdk: PathBuf, opts: &StartOptions, status: &dyn Fn(&str)) -> Result
         if opts.wipe_data {
             cmd.arg("-wipe-data");
         }
+        // Without this the emulator sends silence instead of the microphone
+        // (push-to-talk, voice messages). Android apps still need their own
+        // microphone permission, and the PC asks once.
+        cmd.arg("-allow-host-audio");
         // Keep the emulator's own messages: they explain boot failures.
         let log = std::fs::File::create(emulator_log_path()).context("creating emulator.log")?;
         let child = quiet(&mut cmd)
@@ -778,6 +792,18 @@ impl Device {
         // The emulator process lingers briefly after adb loses it.
         std::thread::sleep(Duration::from_secs(3));
         Ok(())
+    }
+
+    /// Presses or releases the key used as a hardware push-to-talk button
+    /// (F12; apps such as Zello let you assign it).
+    pub fn ptt_key(&self, down: bool) -> Result<()> {
+        let event = format!("EV_KEY:KEY_F12:{}", u8::from(down));
+        adb(
+            &self.sdk,
+            Some(&self.serial),
+            &["emu", "event", "send", &event],
+        )
+        .map(|_| ())
     }
 
     /// Stops an app (it restarts the next time it's used).
