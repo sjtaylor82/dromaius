@@ -35,7 +35,7 @@ Windows / macOS                                    Android Emulator (hidden)
 | Ctrl+L | Cmd+L | Install from a Google Play link or package name |
 | Shift+F10 / Applications key | VoiceOver+Shift+M | More actions: long press, app-specific actions, expand |
 | F5 | Cmd+R | Refresh |
-| Alt+N | Cmd+N | Android notifications |
+| Alt+N | Option+N | Android notifications |
 | Alt+Page Down | Option+Page Down | Next screen of items in a long Android list |
 | Alt+Page Up | Option+Page Up | Previous screen of items in a long Android list |
 | F1 | Cmd+? | Keyboard help |

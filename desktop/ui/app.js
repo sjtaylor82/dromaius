@@ -676,8 +676,10 @@ const SHORTCUTS = [
   {
     id: 'notifications', what: 'Android notifications (new ones are also announced as they arrive)',
     run: () => invoke('global', { action: 'notifications' }),
-    win: ['Alt+N', (e) => e.altKey && e.key.toLowerCase() === 'n'],
-    mac: ['Cmd+N', (e) => e.metaKey && !e.shiftKey && e.key.toLowerCase() === 'n'],
+    // Alt+N on both (Option+N on a Mac, matched by key code: Option changes
+    // the character typed).
+    win: ['Alt+N', (e) => e.altKey && !e.shiftKey && e.code === 'KeyN'],
+    mac: ['Option+N', (e) => e.altKey && !e.shiftKey && e.code === 'KeyN'],
   },
   {
     id: 'next-items', what: 'Next screen of items in a long Android list', run: () => scrollPage(true),

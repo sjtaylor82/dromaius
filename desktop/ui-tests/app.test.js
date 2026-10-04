@@ -377,3 +377,13 @@ test('Mac shortcuts follow Mac conventions and leave Option+arrows alone', async
   assert.equal(press(w, { key: 'Ó', code: 'KeyH', altKey: true, shiftKey: true }), true);
   assert.equal(doc.getElementById('btn-apps').title, 'Option+Shift+H');
 });
+
+test('notifications are Alt+N on Windows and Option+N on a Mac', async () => {
+  for (const mac of [false, true]) {
+    const { w, doc, calls } = await load({ mac });
+    // Option+N types a dead-key accent on a Mac, so the key code matters.
+    assert.equal(press(w, { key: mac ? 'Dead' : 'n', code: 'KeyN', altKey: true }), true);
+    assert.deepEqual(calls.at(-1), ['global', { action: 'notifications' }]);
+    assert.equal(doc.getElementById('btn-notifications').title, mac ? 'Option+N' : 'Alt+N');
+  }
+});
