@@ -66,8 +66,9 @@ Option+N            Android notifications (new ones are also announced)
 Option+Page Down    Next screen of items in a long Android list
 Option+Page Up      Previous screen of items in a long Android list
 Cmd+?               Keyboard help
-Fn+F7               Push to talk: press to start, press again to stop
-                    (Tab to the app's Talk button first)
+Fn+F7               Push to talk, like a phone's PTT button: press to
+                    start, again to stop. In apps such as Zello, set it as
+                    the PTT button by pressing Fn+F7 when asked.
 Fn+F8               Tap and hold (long press) the current item
 
 In edit fields, interact with the field and type. Return in a search field

@@ -702,7 +702,7 @@ const SHORTCUTS = [
     mac: ['Cmd+R', (e) => e.metaKey && !e.shiftKey && e.key.toLowerCase() === 'r'],
   },
   {
-    id: 'talk', what: 'Push to talk: press once to start talking, again to stop',
+    id: 'talk', what: "Push to talk, like a phone's PTT button: press once to start, again to stop. In apps such as Zello, assign it as the PTT button by pressing it when asked",
     run: () => toggleTalk(),
     // Function keys pass through screen readers' browse mode, unlike
     // letters and punctuation. (F7 is also Edge's Caret Browsing key; this
@@ -733,31 +733,15 @@ function currentNode() {
   return document.activeElement?.closest?.('#screen [data-id]') || null;
 }
 
-// Push-to-talk: F7 holds a finger down on the current item (e.g. a Talk
-// button) until the next F7. With no item, it presses the hardware PTT key
-// (F12) instead, for apps that let you assign one.
-let talking = null;
+// Push-to-talk: F7 works like a phone's physical PTT button. The first
+// press holds Android's PTT key (F12) down, the next releases it. Apps such
+// as Zello let you assign it as their PTT button.
+let talking = false;
 
 function toggleTalk() {
-  if (talking === 'touch') {
-    invoke('release');
-  } else if (talking === 'key') {
-    invoke('ptt_key', { down: false });
-  }
-  if (talking) {
-    talking = null;
-    announce('Stopped talking');
-    return;
-  }
-  const node = currentNode();
-  if (node) {
-    invoke('act', { id: node.dataset.id, action: 'touchDown' });
-    talking = 'touch';
-  } else {
-    invoke('ptt_key', { down: true });
-    talking = 'key';
-  }
-  announce('Talking');
+  talking = !talking;
+  invoke('ptt_key', { down: talking });
+  announce(talking ? 'Talking' : 'Stopped talking');
 }
 
 function tapAndHold() {

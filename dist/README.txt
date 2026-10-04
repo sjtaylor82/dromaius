@@ -47,8 +47,9 @@ Alt+N                     Android notifications
 Alt+Page Down             Next screen of items in a long Android list
 Alt+Page Up               Previous screen of items in a long Android list
 F1                        Keyboard help
-F7                        Push to talk: press to start, press again to stop
-                          (Tab to the app's Talk button first)
+F7                        Push to talk, like a phone's PTT button: press to
+                          start, again to stop. In apps such as Zello, set it
+                          as the PTT button by pressing F7 when asked.
 F8                        Tap and hold (long press) the current item
 
 Long lists show only what currently fits on Android's screen. Press Alt+Page
