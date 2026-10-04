@@ -18,6 +18,51 @@ permissions:
   contents: write
 
 jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Rust tests
+        working-directory: desktop
+        run: cargo test
+
+      - name: Page tests
+        working-directory: desktop/ui-tests
+        run: npm ci && npm test
+
+      - name: Get the signed bridge
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release download --repo "${{ github.repository }}" --pattern dromaius-bridge.apk --dir "$env:RUNNER_TEMP"
+          "DROMAIUS_EMBED_APK=$env:RUNNER_TEMP\dromaius-bridge.apk" >> $env:GITHUB_ENV
+
+      - name: Build
+        working-directory: desktop
+        run: cargo build --release
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = (Get-Content desktop/tauri.conf.json | ConvertFrom-Json).version
+          $folder = "out/Dromaius-$version-windows-x64"
+          New-Item -ItemType Directory -Force $folder | Out-Null
+          Copy-Item desktop/target/release/dromaius.exe, desktop/target/release/WebView2Loader.dll, dist/README.txt $folder
+          Compress-Archive -Path $folder -DestinationPath "out/Dromaius-$version-windows-x64.zip"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dromaius-windows-x64
+          path: out/*.zip
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$env:GITHUB_REF_NAME" out/*.zip --clobber --repo "${{ github.repository }}"
+
   macos:
     runs-on: macos-latest
     steps:
