@@ -38,7 +38,7 @@ few seconds because closing Dromaius pauses Android instead of shutting it down.
 
 KEYBOARD COMMANDS
 
-Alt+Shift+H               Your apps
+Alt+H                     Your apps
 Alt+Left                  Back
 Ctrl+L                    Find an app on Google Play
 Shift+F10 or Applications More actions, including long press

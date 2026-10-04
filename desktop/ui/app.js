@@ -662,11 +662,11 @@ const IS_MAC = /Mac/.test(navigator.platform || navigator.userAgent);
 const SHORTCUTS = [
   {
     id: 'apps', what: 'Show your apps', run: () => showApps(),
-    // Same key on both: Alt+Shift+H (Option+Shift+H on a Mac). The physical
-    // key code is used because Option changes the character typed on a Mac.
-    // Alt+Home still works on Windows.
-    win: ['Alt+Shift+H', (e) => (e.altKey && e.shiftKey && e.code === 'KeyH') || (e.altKey && e.key === 'Home')],
-    mac: ['Option+Shift+H', (e) => e.altKey && e.shiftKey && e.code === 'KeyH'],
+    // Same key on both: Alt+H (Option+H on a Mac). The physical key code is
+    // used because Option changes the character typed on a Mac. Alt+Home
+    // still works on Windows.
+    win: ['Alt+H', (e) => (e.altKey && !e.shiftKey && e.code === 'KeyH') || (e.altKey && e.key === 'Home')],
+    mac: ['Option+H', (e) => e.altKey && !e.shiftKey && e.code === 'KeyH'],
   },
   {
     id: 'back', what: 'Android Back', run: () => invoke('global', { action: 'back' }),

@@ -359,8 +359,8 @@ test('Windows shortcuts', async () => {
   assert.equal(press(w, { key: 'ArrowLeft', altKey: true }), true);
   assert.deepEqual(calls.at(-1), ['global', { action: 'back' }]);
   assert.equal(doc.getElementById('btn-back').title, 'Alt+Left');
-  assert.equal(press(w, { key: 'H', code: 'KeyH', altKey: true, shiftKey: true }), true);
-  assert.equal(doc.getElementById('btn-apps').title, 'Alt+Shift+H');
+  assert.equal(press(w, { key: 'h', code: 'KeyH', altKey: true }), true);
+  assert.equal(doc.getElementById('btn-apps').title, 'Alt+H');
   assert.match(doc.getElementById('shortcut-list').textContent, /Ctrl\+L/);
 });
 
@@ -374,8 +374,8 @@ test('Mac shortcuts follow Mac conventions and leave Option+arrows alone', async
   assert.equal(doc.getElementById('btn-install').title, 'Cmd+L');
   assert.match(doc.getElementById('shortcut-list').textContent, /VoiceOver\+Shift\+M/);
   // Option+Shift+H types a symbol on a Mac, so the key code is what matters.
-  assert.equal(press(w, { key: 'Ó', code: 'KeyH', altKey: true, shiftKey: true }), true);
-  assert.equal(doc.getElementById('btn-apps').title, 'Option+Shift+H');
+  assert.equal(press(w, { key: '˙', code: 'KeyH', altKey: true }), true);
+  assert.equal(doc.getElementById('btn-apps').title, 'Option+H');
 });
 
 test('notifications are Alt+N on Windows and Option+N on a Mac', async () => {

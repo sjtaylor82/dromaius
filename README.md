@@ -30,7 +30,7 @@ Windows / macOS                                    Android Emulator (hidden)
 
 | Windows | macOS | Action |
 |---|---|---|
-| Alt+Shift+H | Option+Shift+H | Your apps |
+| Alt+H | Option+H | Your apps |
 | Alt+Left | Cmd+[ | Android Back |
 | Ctrl+L | Cmd+L | Install from a Google Play link or package name |
 | Shift+F10 / Applications key | VoiceOver+Shift+M | More actions: long press, app-specific actions, expand |

@@ -57,7 +57,7 @@ shutting it down.
 
 KEYS
 
-Option+Shift+H      Your apps
+Option+H            Your apps
 Cmd+[               Back
 Cmd+L               Find an app on Google Play (type its name or paste a link)
 VO+Shift+M          More actions for the current item, such as long press
