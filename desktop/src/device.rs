@@ -949,6 +949,29 @@ fn mac_location() -> Result<Location> {
         rx.recv().unwrap_or(Poll::Waiting)
     };
 
+    let permission_name = || {
+        let (tx, rx) = mpsc::channel();
+        DispatchQueue::main().exec_sync(move || {
+            let name = MANAGER.with(|m| {
+                let m = m.borrow();
+                // SAFETY: main thread; the manager is alive.
+                let status = m
+                    .as_ref()
+                    .map(|manager| unsafe { manager.authorizationStatus() });
+                match status {
+                    Some(CLAuthorizationStatus::NotDetermined) => "not decided (no prompt shown?)",
+                    Some(CLAuthorizationStatus::AuthorizedAlways) => "allowed",
+                    Some(CLAuthorizationStatus::AuthorizedWhenInUse) => "allowed while in use",
+                    Some(CLAuthorizationStatus::Denied) => "denied",
+                    Some(CLAuthorizationStatus::Restricted) => "restricted",
+                    _ => "unknown",
+                }
+            });
+            let _ = tx.send(name);
+        });
+        rx.recv().unwrap_or("unknown")
+    };
+
     let stop = || {
         DispatchQueue::main().exec_sync(|| {
             MANAGER.with(|m| {
@@ -980,7 +1003,10 @@ fn mac_location() -> Result<Location> {
                 ));
             }
             _ if started.elapsed() > Duration::from_secs(30) => {
-                break Err(anyhow!("no position within 30 seconds"));
+                break Err(anyhow!(
+                    "no position within 30 seconds (permission: {})",
+                    permission_name()
+                ));
             }
             _ => std::thread::sleep(Duration::from_millis(500)),
         }

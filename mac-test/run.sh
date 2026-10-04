@@ -172,5 +172,27 @@ if [ -x "$PLAY_ADB" ] && "$PLAY_ADB" -s emulator-5580 get-state >/dev/null 2>&1;
     echo "Restarted Google Play Store."
 fi
 
+# macOS only asks for permissions such as Location Services on behalf of an
+# app bundle, so wrap the freshly built program in a minimal Dromaius.app.
+BUNDLE="$TARGET_DIR/Dromaius.app"
+mkdir -p "$BUNDLE/Contents/MacOS"
+cp "$APP" "$BUNDLE/Contents/MacOS/dromaius"
+cat > "$BUNDLE/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key><string>com.dromaius.desktop</string>
+  <key>CFBundleName</key><string>Dromaius</string>
+  <key>CFBundleExecutable</key><string>dromaius</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>0.0.0-dev</string>
+  <key>NSLocationWhenInUseUsageDescription</key><string>Dromaius gives Android apps your location, as a phone would.</string>
+  <key>NSLocationUsageDescription</key><string>Dromaius gives Android apps your location, as a phone would.</string>
+</dict>
+</plist>
+PLIST
+codesign --force --sign - "$BUNDLE" >/dev/null 2>&1 || true
+
 echo "Starting Dromaius. Quit it normally when testing is finished."
-"$APP" 2>&1 | tee "$LOG_DIR/console.log"
+"$BUNDLE/Contents/MacOS/dromaius" 2>&1 | tee "$LOG_DIR/console.log"
