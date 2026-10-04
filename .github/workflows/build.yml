@@ -49,7 +49,11 @@ jobs:
           $version = (Get-Content desktop/tauri.conf.json | ConvertFrom-Json).version
           $folder = "out/Dromaius-$version-windows-x64"
           New-Item -ItemType Directory -Force $folder | Out-Null
-          Copy-Item desktop/target/release/dromaius.exe, desktop/target/release/WebView2Loader.dll, dist/README.txt $folder
+          Copy-Item desktop/target/release/dromaius.exe, dist/README.txt $folder
+          # MinGW builds need the dynamic WebView2 loader; MSVC normally links
+          # its loader statically. Include the DLL when the toolchain emits it.
+          $loader = Get-ChildItem desktop/target/release -Recurse -Filter WebView2Loader.dll | Select-Object -First 1
+          if ($loader) { Copy-Item $loader.FullName $folder }
           Compress-Archive -Path $folder -DestinationPath "out/Dromaius-$version-windows-x64.zip"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
