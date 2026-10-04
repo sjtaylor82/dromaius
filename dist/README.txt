@@ -1,4 +1,4 @@
-DROMAIUS 0.1.1
+DROMAIUS 0.1.2
 
 Use Android apps on Windows or macOS with your screen reader and keyboard.
 

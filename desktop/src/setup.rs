@@ -208,6 +208,17 @@ fn host_arch() -> &'static str {
     }
 }
 
+/// Google's repository calls the 64-bit Intel host architecture `x64`, while
+/// Rust and macOS's `file` utility call it `x86_64`. Accept both spellings so
+/// current and older repository metadata work.
+fn repository_arch_matches(repository_arch: &str, host_arch: &str) -> bool {
+    repository_arch == host_arch
+        || matches!(
+            (repository_arch, host_arch),
+            ("x64", "x86_64") | ("x86_64", "x64")
+        )
+}
+
 /// Finds the package for this operating system and CPU. Google's macOS
 /// repository can contain both Intel and Apple Silicon emulator archives;
 /// choosing by operating system alone can install an emulator that cannot run.
@@ -264,7 +275,8 @@ fn find_archive_for(
         .find(|a| {
             a.descendants()
                 .find(|n| n.has_tag_name("host-arch"))
-                .is_some_and(|arch| arch.text() == Some(host_arch))
+                .and_then(|arch| arch.text())
+                .is_some_and(|arch| repository_arch_matches(arch, host_arch))
         })
         .or_else(|| {
             candidates.into_iter().find(|a| {
@@ -728,7 +740,7 @@ mod tests {
               <channelRef ref="channel-0"/>
               <uses-license ref="android-sdk-license"/>
               <archives>
-                <archive><host-os>macosx</host-os><host-arch>x86_64</host-arch><complete><size>1</size><checksum>intel</checksum><url>emulator-darwin_x64.zip</url></complete></archive>
+                <archive><host-os>macosx</host-os><host-arch>x64</host-arch><complete><size>1</size><checksum>intel</checksum><url>emulator-darwin_x64.zip</url></complete></archive>
                 <archive><host-os>macosx</host-os><host-arch>aarch64</host-arch><complete><size>2</size><checksum>arm</checksum><url>emulator-darwin_aarch64.zip</url></complete></archive>
               </archives>
             </remotePackage>
