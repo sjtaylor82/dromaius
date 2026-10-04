@@ -132,6 +132,16 @@ fn refresh(core: State<Shared>) {
 }
 
 #[tauri::command]
+fn display_mode(core: State<Shared>) -> Result<String, String> {
+    core.lock().unwrap().display_mode()
+}
+
+#[tauri::command]
+fn set_display_mode(core: State<Shared>, mode: String) -> Result<String, String> {
+    core.lock().unwrap().set_display_mode(&mode)
+}
+
+#[tauri::command]
 fn show_apps(core: State<Shared>) {
     core.lock().unwrap().show_apps();
 }
@@ -196,6 +206,8 @@ fn main() {
             scroll,
             global,
             refresh,
+            display_mode,
+            set_display_mode,
             show_apps,
             launch,
             install_link,

@@ -1,6 +1,9 @@
 DROMAIUS FOR MAC (preview)
 Use Android apps on your Mac with VoiceOver and the keyboard.
 
+Dromaius is an independent accessibility project and is not affiliated with or
+endorsed by Google. Android and Google Play are trademarks of Google LLC.
+
 Dromaius runs a real Android phone, Google's official Android emulator, out of
 sight in the background, and shows each Android screen as an accessible web
 page that VoiceOver can read with its usual web navigation (rotor, headings,
@@ -15,7 +18,7 @@ this in Terminal from the Dromaius folder and attach the file it creates:
 
 WHAT YOU NEED
 
-- macOS 11 (Big Sur) or later, on Apple Silicon (M1 or later) or Intel.
+- macOS 12 (Monterey) or later, on Apple Silicon (M1 or later) or Intel.
 - 8 GB of RAM (16 GB is better).
 - About 12 GB of free disk space. Dromaius downloads about 2.8 GB of Android
   from Google; once installed, Android uses about 4 GB, plus about 4 GB for
@@ -60,10 +63,17 @@ Cmd+L               Find an app on Google Play (type its name or paste a link)
 VO+Shift+M          More actions for the current item, such as long press
 Cmd+R               Refresh the screen
 Cmd+Shift+N         Android notifications (new ones are also announced)
+Option+Page Down    Next screen of items in a long Android list
+Option+Page Up      Previous screen of items in a long Android list
 Cmd+?               Keyboard help
 
 In edit fields, interact with the field and type. Return in a search field
 runs the search.
+
+Long lists show only what currently fits on Android's screen. Press
+Option+Page Down or Option+Page Up from anywhere on the screen to move through
+them. While interacting with an Android item, Up and Down Arrow move through
+the items and scroll Android at either end.
 
 
 GOOD TO KNOW

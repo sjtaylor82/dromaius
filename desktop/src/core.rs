@@ -1,7 +1,6 @@
 //! Backend state: the mirrored Android screen, the app list, and what the web
 //! front end should show and where its focus should go.
 
-use std::collections::HashSet;
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
@@ -136,12 +135,23 @@ pub struct InitPayload {
     pub screen: Option<ScreenPayload>,
 }
 
+/// How a list row is recognised across scrolls: its position in the list
+/// and its label (recycler views reuse node ids for different rows).
+type RowKey = (Option<(usize, usize)>, String);
+/// A row's node id together with its position and label.
+type RowIdentity = (u64, Option<(usize, usize)>, String);
+
 struct PendingMore {
     container: u64,
     forward: bool,
-    before: HashSet<u64>,
+    /// Visible stops before scrolling. Recycler views can reuse Android node
+    /// ids for different rows, so position and label are part of the identity.
+    before: Vec<RowIdentity>,
     req: Option<u64>,
     snapshots: u8,
+    candidate: Option<RowKey>,
+    candidate_id: Option<u64>,
+    stable_snapshots: u8,
 }
 
 pub struct Core {
@@ -403,6 +413,19 @@ impl Core {
                     .collect::<Vec<_>>()
                     .join(". ");
                 self.announce(&format!("Notification from {app}: {body}"));
+                // Google Play's background installer can keep "no account"
+                // from before the first sign-in and then fails every install
+                // (status 1408). Restarting Play Store clears it.
+                if app.contains("Play") && title.starts_with("Can't install") {
+                    if let Some(d) = self.device.clone() {
+                        std::thread::spawn(move || {
+                            let _ = d.force_stop("com.android.vending");
+                        });
+                    }
+                    self.announce(
+                        "Dromaius restarted Google Play to fix this. Please try installing again.",
+                    );
+                }
             }
             FromBridge::WindowChanged { .. } => {}
             FromBridge::Result { req, ok, error } => {
@@ -433,14 +456,29 @@ impl Core {
         }
     }
 
-    fn on_snapshot(&mut self, snap: Snapshot) {
+    fn on_snapshot(&mut self, mut snap: Snapshot) {
+        // Defence in depth for older bridge APKs: password contents must not
+        // reach the model, WebView, or the optional diagnostic snapshot.
+        fn redact_passwords(node: &mut crate::protocol::ANode) {
+            if node.password {
+                node.text = None;
+            }
+            for child in &mut node.children {
+                redact_passwords(child);
+            }
+        }
+        for window in &mut snap.windows {
+            if let Some(root) = &mut window.root {
+                redact_passwords(root);
+            }
+        }
         if self.model.windows.is_empty() {
             crate::timing::mark("first Android screen received");
         }
         if crate::debug_enabled()
             && let Ok(json) = serde_json::to_string(&snap)
         {
-            let _ = std::fs::write(std::env::temp_dir().join("dromaius-snapshot.json"), json);
+            let _ = std::fs::write(crate::timing::snapshot_path(), json);
         }
         self.model = Model::from_snapshot(&snap);
         let Some(nav) = self.model.nav_window() else {
@@ -531,6 +569,11 @@ impl Core {
         out
     }
 
+    fn stop_identity(&self, id: u64) -> (u64, Option<(usize, usize)>, String) {
+        let n = &self.model.nodes[&id];
+        (id, n.position, n.label.clone())
+    }
+
     /// After "Show more items", focus the first newly loaded item.
     fn check_pending_more(&mut self) -> Option<u64> {
         let p = self.pending_more.as_mut()?;
@@ -538,19 +581,69 @@ impl Core {
         let (container, forward) = (p.container, p.forward);
         let stops = self.stops_in(container);
         let p = self.pending_more.as_ref()?;
-        let mut fresh = stops.iter().copied().filter(|id| !p.before.contains(id));
+        let identities: Vec<_> = stops.iter().map(|id| self.stop_identity(*id)).collect();
+        let changed = identities != p.before;
+        let mut fresh = stops
+            .iter()
+            .copied()
+            .zip(identities.iter())
+            .filter(|(_, identity)| !p.before.contains(identity))
+            .map(|(id, _)| id);
         let target = if forward {
             fresh.next()
         } else {
             fresh.next_back()
-        };
-        if target.is_some() || p.snapshots > 6 {
-            if target.is_none() {
-                self.announce("No more items");
+        }
+        // Some RecyclerViews reuse every visible view holder and its node id.
+        // If the page changed but no distinct identity survived that reuse,
+        // focus the edge item on the newly visible page rather than losing focus.
+        .or_else(|| {
+            changed
+                .then(|| if forward { stops.first() } else { stops.last() })
+                .flatten()
+                .copied()
+        });
+        let mut resolved = None;
+        let mut request_confirmation = false;
+        if let Some(id) = target {
+            let n = &self.model.nodes[&id];
+            let key = (n.position, n.label.clone());
+            let p = self.pending_more.as_mut()?;
+            if p.candidate.as_ref() == Some(&key) {
+                p.stable_snapshots += 1;
+            } else {
+                p.candidate = Some(key);
+                p.stable_snapshots = 1;
+            }
+            p.candidate_id = Some(id);
+            if p.stable_snapshots >= 2 || p.snapshots > 6 {
+                resolved = p.candidate_id;
+            } else {
+                request_confirmation = true;
+            }
+        } else if p.snapshots > 6 {
+            self.pending_more = None;
+            crate::timing::mark("scroll produced no new focus target");
+            self.announce("No more items");
+            return None;
+        }
+
+        if request_confirmation {
+            // Accessibility events often expose an intermediate RecyclerView
+            // state. Ask for another tree and require the logical target to
+            // agree before moving WebView focus.
+            self.send(ToBridge::Refresh);
+            return None;
+        }
+
+        if let Some(id) = resolved {
+            if let Some(n) = self.model.nodes.get(&id) {
+                crate::timing::mark(&format!("scroll focus: {} at {:?}", n.label, n.position));
             }
             self.pending_more = None;
+            return Some(id);
         }
-        target
+        None
     }
 
     fn check_install_watch(&mut self) -> Option<u64> {
@@ -621,7 +714,20 @@ impl Core {
     }
 
     pub fn scroll(&mut self, container: u64, forward: bool) {
-        let before = self.stops_in(container).into_iter().collect();
+        if self.pending_more.is_some() {
+            crate::timing::mark("scroll ignored: previous scroll still awaiting focus");
+            return;
+        }
+        let before = self
+            .stops_in(container)
+            .into_iter()
+            .map(|id| self.stop_identity(id))
+            .collect();
+        crate::timing::mark(if forward {
+            "scroll requested: next items"
+        } else {
+            "scroll requested: previous items"
+        });
         let req = self.send(ToBridge::Action {
             id: container,
             action: if forward {
@@ -636,12 +742,44 @@ impl Core {
             before,
             req,
             snapshots: 0,
+            candidate: None,
+            candidate_id: None,
+            stable_snapshots: 0,
         });
     }
 
     pub fn refresh(&mut self) {
         self.send(ToBridge::Refresh);
         self.send(ToBridge::Apps);
+    }
+
+    pub fn display_mode(&self) -> Result<String, String> {
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| "Android is not running yet".to_string())?;
+        device
+            .display_mode()
+            .map(str::to_string)
+            .map_err(|e| format!("Could not read display mode: {e:#}"))
+    }
+
+    pub fn set_display_mode(&mut self, mode: &str) -> Result<String, String> {
+        let device = self
+            .device
+            .as_ref()
+            .ok_or_else(|| "Android is not running yet".to_string())?;
+        let applied = device
+            .set_display_mode(mode)
+            .map_err(|e| format!("Could not change display mode: {e:#}"))?;
+        let label = if applied == "tablet" {
+            "Tablet"
+        } else {
+            "Phone"
+        };
+        self.announce(&format!("{label} mode enabled"));
+        crate::timing::mark(&format!("display mode: {applied}"));
+        Ok(applied.to_string())
     }
 
     pub fn show_apps(&mut self) {
@@ -803,7 +941,7 @@ fn run_setup(events: &Sender<BackendEvent>) -> anyhow::Result<std::path::PathBuf
 
     let (reply, answer) = std::sync::mpsc::channel();
     let _ = events.send(BackendEvent::LicenseRequest {
-        text: plan.license_text.clone(),
+        text: plan.license_text(),
         android: plan.android.clone().unwrap_or_else(|| "Android".into()),
         items: plan
             .downloads

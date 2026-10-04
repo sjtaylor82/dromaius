@@ -28,18 +28,24 @@ Windows / macOS                                    Android Emulator (hidden)
 
 ## Using it
 
-| Key | Action |
-|---|---|
-| Alt+Home | Your apps |
-| Alt+Left | Android Back |
-| Ctrl+L | Install from a Google Play link (or package name) |
-| Shift+F10 / Applications key | More actions: long press, app-specific actions, expand |
-| F5 | Refresh |
-| Alt+N | Android notifications |
-| F1 | Keyboard help |
+| Windows | macOS | Action |
+|---|---|---|
+| Alt+Home | Cmd+Shift+H | Your apps |
+| Alt+Left | Cmd+[ | Android Back |
+| Ctrl+L | Cmd+L | Install from a Google Play link or package name |
+| Shift+F10 / Applications key | VoiceOver+Shift+M | More actions: long press, app-specific actions, expand |
+| F5 | Cmd+R | Refresh |
+| Alt+N | Cmd+N | Android notifications |
+| Alt+Page Down | Option+Page Down | Next screen of items in a long Android list |
+| Alt+Page Up | Option+Page Up | Previous screen of items in a long Android list |
+| F1 | Cmd+? | Keyboard help |
 
-Long lists only contain what fits on the Android screen; use **Show more items**
-at the end of a list to scroll it.
+Long lists only contain what fits on the Android screen. Press **Alt+Page Down**
+or **Alt+Page Up** on Windows, or **Option+Page Down** or **Option+Page Up** on
+macOS, from anywhere on the screen. You can also use the buttons at the ends of
+the list. In screen-reader focus mode, Up and Down Arrow move through Android
+items and scroll at the ends. The Arrow keys are handled only while keyboard
+focus is inside the Android screen.
 
 The first start creates the virtual device and cold-boots Android (about a
 minute). Closing the window pauses the emulator, so the next start takes a few
@@ -57,7 +63,7 @@ location), `--mock <snapshot.json>` (render a saved screen without Android).
 ## Requirements for users
 
 - Windows 10/11 64-bit with hardware virtualization and the **Windows Hypervisor
-  Platform** feature enabled, or macOS 11 or later (preview; see
+  Platform** feature enabled, or macOS 12 or later (preview; see
   `dist/README-mac.txt` for the Mac keys and first-open step)
 - 8 GB RAM (16 GB recommended), about 12 GB free disk space: Android itself
   is about 4 GB, its quick-start snapshot about 4 GB, plus your apps
@@ -118,6 +124,13 @@ but not notarized, so users open it once via Open in Finder's menu
 latest GitHub release, so the signing key stays off GitHub; publish the
 release's `dromaius-bridge.apk` asset whenever the bridge changes.
 
+For repeated testing from a folder shared with a Mac, use
+`bash mac-test/run.sh`. It builds the current source locally instead of
+downloading another Actions artifact. The prepared `mac-test` folder includes
+the signed bridge and keeps each run's build, console, startup, emulator,
+snapshot and crash diagnostics under `mac-test/logs`; see
+`mac-test/README.txt`.
+
 ### Tests
 
 ```bash
@@ -139,6 +152,8 @@ The Rust tests cover the Android tree simplification and setup logic; the
   e.g. empty ones to test first-run setup without touching your real setup.
 - `DROMAIUS_DEBUG=1` saves every Android snapshot to
   `%TEMP%\dromaius-snapshot.json` (usable with `--mock`).
+- `DROMAIUS_LOG_DIR` puts `startup.log`, `emulator.log`, and debug snapshots in
+  a chosen directory. The Mac test launcher sets this to its per-run log folder.
 - `tools/uia-dump.ps1` prints what a screen reader sees through UI Automation,
   and can send keys: `powershell -File tools\uia-dump.ps1 -Depth 30 -Keys "{TAB}"`.
 - Don't run `uiautomator dump` while testing: it temporarily unbinds
@@ -165,3 +180,12 @@ notifications, quickSettings), and `action` on a node (`click`, `longClick`,
   install or run on the emulator.
 - Content drawn without accessibility information (most games) can't be mirrored.
 - Google sign-in has to be done once, through the mirrored Android screens.
+
+## Licensing and trademarks
+
+Dromaius is an independent accessibility project and is not affiliated with or
+endorsed by Google. Google software is not included in Dromaius distributions;
+required Android SDK packages are downloaded directly from Google only after
+the user is shown and accepts every applicable package licence.
+
+Android is a trademark of Google LLC. Google Play is a trademark of Google LLC.

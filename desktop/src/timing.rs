@@ -16,8 +16,19 @@ static LOG: OnceLock<Mutex<Log>> = OnceLock::new();
 /// Path of the log file: %LOCALAPPDATA%\Dromaius\startup.log (or the
 /// platform equivalent next to Dromaius's own SDK folder).
 pub fn log_path() -> std::path::PathBuf {
+    if let Some(dir) = std::env::var_os("DROMAIUS_LOG_DIR") {
+        return std::path::PathBuf::from(dir).join("startup.log");
+    }
     let sdk = crate::setup::own_sdk_dir();
     sdk.parent().unwrap_or(&sdk).join("startup.log")
+}
+
+/// Latest raw Android accessibility tree when diagnostic snapshots are on.
+pub fn snapshot_path() -> std::path::PathBuf {
+    if let Some(dir) = std::env::var_os("DROMAIUS_LOG_DIR") {
+        return std::path::PathBuf::from(dir).join("dromaius-snapshot.json");
+    }
+    std::env::temp_dir().join("dromaius-snapshot.json")
 }
 
 /// Starts the clock and replaces the previous run's log.

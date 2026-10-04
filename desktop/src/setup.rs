@@ -5,6 +5,7 @@
 //! read the repository XML, show the licence, download with the system's
 //! `curl`, verify SHA-1 checksums and unpack with the system's `tar`.
 
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -88,8 +89,43 @@ pub fn is_complete(sdk: &Path) -> bool {
     sdk.join("platform-tools")
         .join(format!("adb{EXE}"))
         .exists()
-        && sdk.join("emulator").join(format!("emulator{EXE}")).exists()
+        && emulator_is_native(sdk)
         && installed_image(sdk).is_some()
+}
+
+/// Whether the installed emulator can run natively on this build's CPU.
+///
+/// macOS can transparently launch an old Intel emulator through Rosetta on an
+/// Apple Silicon Mac. That looks usable until QEMU rejects the ARM64 Android
+/// image, so existence alone is not a sufficient installation check there.
+fn emulator_is_native(sdk: &Path) -> bool {
+    let emulator = sdk.join("emulator").join(format!("emulator{EXE}"));
+    if !emulator.exists() {
+        return false;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let Ok(out) = Command::new("/usr/bin/file").arg(&emulator).output() else {
+            // Do not force a large redownload merely because inspection is
+            // unavailable. Starting the emulator will still report the error.
+            return true;
+        };
+        if !out.status.success() {
+            return true;
+        }
+        let description = String::from_utf8_lossy(&out.stdout);
+        return file_description_has_arch(&description, host_arch());
+    }
+    #[cfg(not(target_os = "macos"))]
+    true
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn file_description_has_arch(description: &str, arch: &str) -> bool {
+    let wanted = if arch == "aarch64" { "arm64" } else { arch };
+    description
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+        .any(|word| word == wanted)
 }
 
 #[derive(Debug, Clone)]
@@ -105,8 +141,8 @@ pub struct Download {
 #[derive(Debug, Clone)]
 pub struct Plan {
     pub downloads: Vec<Download>,
-    pub license_id: String,
-    pub license_text: String,
+    /// Every distinct licence required by the packages in `downloads`.
+    pub licenses: Vec<(String, String)>,
     /// The Android release that will be installed, e.g. "Android 17 (API 37)".
     pub android: Option<String>,
 }
@@ -114,6 +150,16 @@ pub struct Plan {
 impl Plan {
     pub fn total_bytes(&self) -> u64 {
         self.downloads.iter().map(|d| d.size).sum()
+    }
+
+    /// Text shown before downloading. Keep each licence identifiable so one
+    /// acceptance cannot silently stand in for a different package licence.
+    pub fn license_text(&self) -> String {
+        self.licenses
+            .iter()
+            .map(|(id, text)| format!("Licence: {id}\n\n{text}"))
+            .collect::<Vec<_>>()
+            .join("\n\n------------------------------------------------------------\n\n")
     }
 }
 
@@ -151,6 +197,26 @@ struct Archive {
 
 /// The stable-channel archive of a package for this host.
 fn find_archive(doc: &roxmltree::Document, path: &str) -> Option<Archive> {
+    find_archive_for(doc, path, HOST, host_arch())
+}
+
+fn host_arch() -> &'static str {
+    if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else {
+        "x86_64"
+    }
+}
+
+/// Finds the package for this operating system and CPU. Google's macOS
+/// repository can contain both Intel and Apple Silicon emulator archives;
+/// choosing by operating system alone can install an emulator that cannot run.
+fn find_archive_for(
+    doc: &roxmltree::Document,
+    path: &str,
+    host: &str,
+    host_arch: &str,
+) -> Option<Archive> {
     let stable = doc
         .descendants()
         .find(|n| n.has_tag_name("channel") && n.text() == Some("stable"))
@@ -183,15 +249,30 @@ fn find_archive(doc: &roxmltree::Document, path: &str) -> Option<Archive> {
                 .join(".")
         })
         .unwrap_or_default();
-    let archive = package
+    let candidates = package
         .descendants()
         .filter(|n| n.has_tag_name("archive"))
-        .find(
-            |a| match a.descendants().find(|n| n.has_tag_name("host-os")) {
-                Some(os) => os.text() == Some(HOST),
-                None => true,
-            },
-        )?;
+        .filter(|a| {
+            a.descendants()
+                .find(|n| n.has_tag_name("host-os"))
+                .is_none_or(|os| os.text() == Some(host))
+        });
+    // Prefer an explicitly matching architecture. Older packages without a
+    // host-arch remain a fallback, but an archive for the other CPU never is.
+    let archive = candidates
+        .clone()
+        .find(|a| {
+            a.descendants()
+                .find(|n| n.has_tag_name("host-arch"))
+                .is_some_and(|arch| arch.text() == Some(host_arch))
+        })
+        .or_else(|| {
+            candidates.into_iter().find(|a| {
+                a.descendants()
+                    .find(|n| n.has_tag_name("host-arch"))
+                    .is_none()
+            })
+        })?;
     let text = |tag: &str| {
         archive
             .descendants()
@@ -262,20 +343,21 @@ pub fn plan(sdk: &Path) -> Result<Plan> {
     let repo_xml = fetch_text(&format!("{REPO}repository2-3.xml"))?;
     let repo = roxmltree::Document::parse(&repo_xml).context("reading Google's package list")?;
     let mut downloads = Vec::new();
-    let mut license_id = "android-sdk-license".to_string();
+    let mut licenses = BTreeMap::<String, String>::new();
 
     for (path, label, exe) in [
         ("platform-tools", "Android tools", "adb"),
         ("emulator", "Android emulator", "emulator"),
     ] {
-        if sdk.join(path).join(format!("{exe}{EXE}")).exists() {
+        let installed = sdk.join(path).join(format!("{exe}{EXE}")).exists();
+        if installed && (path != "emulator" || emulator_is_native(sdk)) {
             continue;
         }
         let a = find_archive(&repo, path)
             .ok_or_else(|| anyhow!("{path} not found in Google's package list"))?;
-        if a.license != "android-sdk-license" {
-            license_id = a.license;
-        }
+        let text = license_text(&repo, &a.license)
+            .ok_or_else(|| anyhow!("licence {} not found", a.license))?;
+        licenses.insert(a.license.clone(), text);
         downloads.push(Download {
             label,
             url: format!("{REPO}{}", a.url),
@@ -285,7 +367,6 @@ pub fn plan(sdk: &Path) -> Result<Plan> {
         });
     }
 
-    let mut license_text_value = license_text(&repo, &license_id);
     let mut android = installed_image(sdk);
     if android.is_none() {
         let img_xml = fetch_text(&format!("{PLAY_IMAGES}sys-img2-3.xml"))?;
@@ -295,10 +376,10 @@ pub fn plan(sdk: &Path) -> Result<Plan> {
         let pin = std::env::var("DROMAIUS_TEST_ANDROID").ok();
         let (platform, a) = newest_image(&images, pin.as_deref())
             .ok_or_else(|| anyhow!("no Google Play system image available for {}", image_abi()))?;
-        if a.license != license_id {
-            license_text_value = license_text(&images, &a.license).or(license_text_value);
-            license_id = a.license;
-        }
+        let text = license_text(&images, &a.license)
+            .or_else(|| license_text(&repo, &a.license))
+            .ok_or_else(|| anyhow!("licence {} not found", a.license))?;
+        licenses.insert(a.license.clone(), text);
         downloads.push(Download {
             label: "Android system (Google Play)",
             url: format!("{PLAY_IMAGES}{}", a.url),
@@ -313,12 +394,9 @@ pub fn plan(sdk: &Path) -> Result<Plan> {
         android = Some(platform);
     }
 
-    let license_text =
-        license_text_value.ok_or_else(|| anyhow!("licence {license_id} not found"))?;
     Ok(Plan {
         downloads,
-        license_id,
-        license_text,
+        licenses: licenses.into_iter().collect(),
         android: android.map(|p| android_name(&p)),
     })
 }
@@ -379,10 +457,10 @@ pub fn versions(sdk: &Path, in_use: Option<&str>) -> Versions {
 pub fn record_license(sdk: &Path, plan: &Plan) -> Result<()> {
     let dir = sdk.join("licenses");
     std::fs::create_dir_all(&dir)?;
-    let hash = sha1_smol::Sha1::from(plan.license_text.as_bytes())
-        .digest()
-        .to_string();
-    std::fs::write(dir.join(&plan.license_id), format!("\n{hash}"))?;
+    for (id, text) in &plan.licenses {
+        let hash = sha1_smol::Sha1::from(text.as_bytes()).digest().to_string();
+        std::fs::write(dir.join(id), format!("\n{hash}"))?;
+    }
     Ok(())
 }
 
@@ -640,6 +718,42 @@ mod tests {
     }
 
     #[test]
+    fn selects_the_native_macos_emulator() {
+        let xml = r#"
+          <repository>
+            <channel id="channel-0">stable</channel>
+            <license id="android-sdk-license">licence</license>
+            <remotePackage path="emulator">
+              <revision><major>36</major><minor>2</minor><micro>0</micro></revision>
+              <channelRef ref="channel-0"/>
+              <uses-license ref="android-sdk-license"/>
+              <archives>
+                <archive><host-os>macosx</host-os><host-arch>x86_64</host-arch><complete><size>1</size><checksum>intel</checksum><url>emulator-darwin_x64.zip</url></complete></archive>
+                <archive><host-os>macosx</host-os><host-arch>aarch64</host-arch><complete><size>2</size><checksum>arm</checksum><url>emulator-darwin_aarch64.zip</url></complete></archive>
+              </archives>
+            </remotePackage>
+          </repository>"#;
+        let doc = roxmltree::Document::parse(xml).unwrap();
+        let arm = super::find_archive_for(&doc, "emulator", "macosx", "aarch64").unwrap();
+        let intel = super::find_archive_for(&doc, "emulator", "macosx", "x86_64").unwrap();
+        assert_eq!(arm.url, "emulator-darwin_aarch64.zip");
+        assert_eq!(intel.url, "emulator-darwin_x64.zip");
+    }
+
+    #[test]
+    fn recognises_macos_binary_architectures() {
+        let arm = "emulator: Mach-O 64-bit executable arm64";
+        let intel = "emulator: Mach-O 64-bit executable x86_64";
+        let universal = "emulator: Mach-O universal binary with 2 architectures: [x86_64] [arm64]";
+        assert!(super::file_description_has_arch(arm, "aarch64"));
+        assert!(!super::file_description_has_arch(arm, "x86_64"));
+        assert!(super::file_description_has_arch(intel, "x86_64"));
+        assert!(!super::file_description_has_arch(intel, "aarch64"));
+        assert!(super::file_description_has_arch(universal, "aarch64"));
+        assert!(super::file_description_has_arch(universal, "x86_64"));
+    }
+
+    #[test]
     #[ignore = "needs internet"]
     fn plans_a_fresh_install() {
         let dir = std::env::temp_dir().join("dromaius-plan-test");
@@ -653,9 +767,9 @@ mod tests {
             );
         }
         println!(
-            "licence {} ({} chars)",
-            plan.license_id,
-            plan.license_text.len()
+            "{} licence(s) ({} chars)",
+            plan.licenses.len(),
+            plan.license_text().len()
         );
         assert_eq!(plan.downloads.len(), 3);
     }

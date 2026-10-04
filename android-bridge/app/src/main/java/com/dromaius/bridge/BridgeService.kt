@@ -250,7 +250,9 @@ class BridgeService : AccessibilityService() {
         cache[id] = n
         val o = JSONObject().put("id", id)
         n.className?.let { o.put("cls", it.toString()) }
-        n.text?.let { if (it.isNotEmpty()) o.put("text", it.toString()) }
+        // Password values must never cross the bridge or enter debug snapshots.
+        // The desktop keeps what the user is actively typing in its local field.
+        if (!n.isPassword) n.text?.let { if (it.isNotEmpty()) o.put("text", it.toString()) }
         n.contentDescription?.let { if (it.isNotEmpty()) o.put("desc", it.toString()) }
         n.hintText?.let { if (it.isNotEmpty()) o.put("hint", it.toString()) }
         n.stateDescription?.let { if (it.isNotEmpty()) o.put("state", it.toString()) }

@@ -1,6 +1,12 @@
 # Release signing key and its passwords: never commit (the repository is public).
 /signing/
+.DS_Store
 
 # Release packages built from dist/README.txt and the build outputs
 /dist/*/
 /dist/*.zip
+
+# Local macOS test builds, logs and the copied bridge APK
+/mac-test/target/
+/mac-test/logs/
+/mac-test/dromaius-bridge.apk

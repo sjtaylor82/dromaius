@@ -695,6 +695,64 @@ fn bridge_bound(d: &Device) -> bool {
 }
 
 impl Device {
+    pub fn display_mode(&self) -> Result<&'static str> {
+        let size = adb(&self.sdk, Some(&self.serial), &["shell", "wm", "size"])?;
+        let density = adb(&self.sdk, Some(&self.serial), &["shell", "wm", "density"])?;
+        let narrow_tablet = size.contains("Override size: 1080x2880");
+        if narrow_tablet {
+            // Migrate the original tall, narrow tablet profile. Although its
+            // diagonal was tablet-sized, it exposed only ~617 dp of width and
+            // therefore still showed very few cards in horizontal carousels.
+            adb(
+                &self.sdk,
+                Some(&self.serial),
+                &["shell", "wm", "size", "1600x2560"],
+            )?;
+        }
+        Ok(
+            if narrow_tablet
+                || size.contains("Override size: 1600x2560")
+                || density.contains("Override density: 280")
+            {
+                "tablet"
+            } else {
+                "phone"
+            },
+        )
+    }
+
+    pub fn set_display_mode(&self, mode: &str) -> Result<&'static str> {
+        match mode {
+            "phone" => {
+                adb(
+                    &self.sdk,
+                    Some(&self.serial),
+                    &["shell", "wm", "size", "reset"],
+                )?;
+                adb(
+                    &self.sdk,
+                    Some(&self.serial),
+                    &["shell", "wm", "density", "reset"],
+                )?;
+                Ok("phone")
+            }
+            "tablet" => {
+                adb(
+                    &self.sdk,
+                    Some(&self.serial),
+                    &["shell", "wm", "size", "1600x2560"],
+                )?;
+                adb(
+                    &self.sdk,
+                    Some(&self.serial),
+                    &["shell", "wm", "density", "280"],
+                )?;
+                Ok("tablet")
+            }
+            _ => bail!("unknown display mode {mode}"),
+        }
+    }
+
     /// Pauses the virtual device so the next launch is instant.
     pub fn pause(&self) -> Result<()> {
         adb(&self.sdk, Some(&self.serial), &["emu", "avd", "stop"]).map(|_| ())
@@ -720,6 +778,16 @@ impl Device {
         // The emulator process lingers briefly after adb loses it.
         std::thread::sleep(Duration::from_secs(3));
         Ok(())
+    }
+
+    /// Stops an app (it restarts the next time it's used).
+    pub fn force_stop(&self, package: &str) -> Result<()> {
+        adb(
+            &self.sdk,
+            Some(&self.serial),
+            &["shell", "am", "force-stop", package],
+        )
+        .map(|_| ())
     }
 
     /// Starts an app's launcher activity through adb.
@@ -847,30 +915,39 @@ fn windows_location() -> Result<Location> {
 
 /// Approximate location of this internet connection (city level), from ip-api.com.
 pub fn ip_location() -> Result<Location> {
-    use std::io::{Read, Write};
-    use std::net::{TcpStream, ToSocketAddrs};
-
-    let addr = ("ip-api.com", 80)
-        .to_socket_addrs()?
-        .next()
-        .ok_or_else(|| anyhow!("cannot resolve ip-api.com"))?;
-    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    stream.write_all(
-        b"GET /json/?fields=status,message,city,regionName,lat,lon HTTP/1.0\r\nHost: ip-api.com\r\n\r\n",
-    )?;
-    let mut response = String::new();
-    stream.read_to_string(&mut response)?;
-    let body = response.split_once("\r\n\r\n").map_or("", |(_, b)| b);
+    // Never expose or accept location data over plaintext HTTP. ipwho.is
+    // supports HTTPS without an API key and derives location from the request.
+    let out = quiet(&mut Command::new(if cfg!(windows) {
+        "curl.exe"
+    } else {
+        "curl"
+    }))
+    .args([
+        "-sSfL",
+        "--retry",
+        "2",
+        "--max-time",
+        "10",
+        "https://ipwho.is/",
+    ])
+    .stdin(Stdio::null())
+    .output()
+    .context("running secure location lookup")?;
+    if !out.status.success() {
+        bail!(
+            "secure location lookup failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
     let v: serde_json::Value =
-        serde_json::from_str(body).context("bad response from ip-api.com")?;
-    if v["status"] != "success" {
+        serde_json::from_slice(&out.stdout).context("bad response from secure location lookup")?;
+    if v["success"] != true {
         bail!("location lookup failed: {}", v["message"]);
     }
-    let (Some(lat), Some(lon)) = (v["lat"].as_f64(), v["lon"].as_f64()) else {
+    let (Some(lat), Some(lon)) = (v["latitude"].as_f64(), v["longitude"].as_f64()) else {
         bail!("location lookup returned no coordinates");
     };
-    let place = [v["city"].as_str(), v["regionName"].as_str()]
+    let place = [v["city"].as_str(), v["region"].as_str()]
         .into_iter()
         .flatten()
         .filter(|s| !s.is_empty())

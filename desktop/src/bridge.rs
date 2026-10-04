@@ -1,6 +1,6 @@
 //! TCP connection to the Android bridge (through `adb forward`).
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -60,14 +60,47 @@ impl Bridge {
 
 /// Forwards messages until the connection drops. Returns false if the app is shutting down.
 fn read_loop(stream: TcpStream, events: &Sender<BackendEvent>) -> bool {
+    const MAX_MESSAGE_BYTES: u64 = 8 * 1024 * 1024;
     // adb accepts the forward even when nothing listens on the device, then
     // closes it: we only count as connected once the bridge says hello.
-    for line in BufReader::with_capacity(256 * 1024, stream).lines() {
-        let Ok(line) = line else { return true };
+    let mut reader = BufReader::with_capacity(256 * 1024, stream);
+    loop {
+        let mut line = String::new();
+        let read = match (&mut reader)
+            .take(MAX_MESSAGE_BYTES + 1)
+            .read_line(&mut line)
+        {
+            Ok(0) => return true,
+            Ok(n) => n,
+            Err(_) => return true,
+        };
+        if read as u64 > MAX_MESSAGE_BYTES {
+            // Drain the rest without retaining it. A local process must not be
+            // able to exhaust desktop memory by impersonating the bridge.
+            loop {
+                let Ok(buf) = reader.fill_buf() else {
+                    return true;
+                };
+                if buf.is_empty() {
+                    return true;
+                }
+                let (used, finished) = match buf.iter().position(|b| *b == b'\n') {
+                    Some(pos) => (pos + 1, true),
+                    None => (buf.len(), false),
+                };
+                reader.consume(used);
+                if finished {
+                    break;
+                }
+            }
+            eprintln!("discarded oversized bridge message");
+            continue;
+        }
+        let line = line.trim_end_matches(['\r', '\n']);
         if line.trim().is_empty() {
             continue;
         }
-        match serde_json::from_str::<FromBridge>(&line) {
+        match serde_json::from_str::<FromBridge>(line) {
             Ok(msg) => {
                 if events.send(BackendEvent::Bridge(msg)).is_err() {
                     return false;
@@ -76,5 +109,4 @@ fn read_loop(stream: TcpStream, events: &Sender<BackendEvent>) -> bool {
             Err(e) => eprintln!("bad message from bridge: {e}"),
         }
     }
-    true
 }

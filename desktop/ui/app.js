@@ -16,6 +16,8 @@ function invoke(cmd, args) {
 let mode = 'starting';
 let lastScreen = null;
 let apps = [];
+let pendingPageFocus = null;
+let pageFocusFallback = null;
 /** Values we recently sent per edit field, to ignore Android echoing them back late. */
 const sentValues = new Map();
 
@@ -68,10 +70,17 @@ function setMode(next) {
 
 function focusNode(id) {
   const el = document.querySelector(`#screen [data-id="${id}"]`);
-  if (!el) return;
-  const natural = ['BUTTON', 'INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName);
-  if (!natural) el.tabIndex = -1;
-  el.focus();
+  if (!el) return false;
+  focusScreenElement(el);
+  return true;
+}
+
+function focusScreenElement(el) {
+  // Clickable headings contain their real button inside the heading element.
+  const target = el.querySelector?.(':scope > button[data-id]') || el;
+  const natural = ['BUTTON', 'INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
+  if (!natural) target.tabIndex = -1;
+  target.focus();
 }
 
 // ------------------------------------------------------------------ apps view
@@ -118,7 +127,10 @@ function renderScreen(screen) {
   setText($('screen-title'), screen.title);
   updateTitle();
   patch($('screen'), screen.nodes.map(nodeItem));
-  if (screen.focus) focusNode(screen.focus);
+  if (screen.focus) {
+    const focused = focusNode(screen.focus);
+    if (focused && pendingPageFocus) finishPageFocus();
+  }
   else if (screen.newScreen) $('screen-title').focus();
 }
 
@@ -197,7 +209,9 @@ function scrollItem(container, forward) {
       b.className = 'scroll';
       b.dataset.scroll = forward ? 'more' : 'less';
       b.dataset.container = container.id;
-      b.textContent = forward ? 'Show more items' : 'Show earlier items';
+      b.textContent = forward
+        ? 'Show more items (Alt+Page Down)'
+        : 'Show earlier items (Alt+Page Up)';
       return b;
     },
     update() {},
@@ -492,6 +506,95 @@ $('apps-list').addEventListener('click', (e) => {
 
 const screen = $('screen');
 
+/** Page the Android collection without first finding its synthetic button. */
+function scrollPage(forward) {
+  const direction = forward ? 'more' : 'less';
+  const control = screen.querySelector(`[data-scroll="${direction}"]`);
+  if (!control) {
+    announce(forward ? 'No more items' : 'No earlier items');
+    return;
+  }
+  invoke('scroll', { id: control.dataset.container, forward });
+  announce(forward ? 'Loading more items' : 'Loading earlier items');
+}
+
+/** Scroll one particular Android collection. */
+function scrollCollection(container, forward, silent = false) {
+  const direction = forward ? 'more' : 'less';
+  const control = container?.querySelector(`[data-scroll="${direction}"]`);
+  if (!control) return false;
+  if (pendingPageFocus?.inFlight) return true;
+  pendingPageFocus = {
+    container: control.dataset.container,
+    forward,
+    inFlight: true,
+  };
+  const current = document.activeElement.closest?.('[data-id]');
+  const anchor = $('scroll-focus-anchor');
+  setText(anchor, current?._desc?.label || 'Android screen');
+  anchor.hidden = false;
+  anchor.focus();
+  clearTimeout(pageFocusFallback);
+  pageFocusFallback = setTimeout(() => {
+    if (!pendingPageFocus) return;
+    pendingPageFocus = null;
+    anchor.hidden = true;
+    $('screen-title').focus();
+  }, 3000);
+  invoke('scroll', { id: control.dataset.container, forward });
+  if (!silent) announce(forward ? 'Loading more items' : 'Loading earlier items');
+  return true;
+}
+
+function finishPageFocus() {
+  clearTimeout(pageFocusFallback);
+  pageFocusFallback = null;
+  pendingPageFocus = null;
+  $('scroll-focus-anchor').hidden = true;
+}
+
+/**
+ * Move through the mirrored Android stops when browse mode is off. At either
+ * end, perform the same Android paging action as Alt+Page Up/Down.
+ */
+function moveScreenFocus(forward, origin) {
+  const containers = new Set(['list', 'grid', 'group']);
+  let current = origin?.closest?.('[data-id]') || document.activeElement;
+  while (current && !current._desc) current = current.parentElement;
+
+  // Treat a scrollable collection as its own navigation sequence. Otherwise,
+  // reaching its final item could move into unrelated controls elsewhere on
+  // the Android screen instead of performing the collection's scroll action.
+  let collection = current?.parentElement;
+  while (collection && collection !== screen
+      && !(collection._desc && containers.has(collection._desc.kind))) {
+    collection = collection.parentElement;
+  }
+  const scope = collection && collection !== screen ? collection : screen;
+  const stops = [...scope.querySelectorAll('[data-id]')]
+    .filter((el) => el._desc && !containers.has(el._desc.kind));
+  if (!stops.length) return;
+  const index = stops.indexOf(current);
+  const nextIndex = index < 0
+    ? (forward ? 0 : stops.length - 1)
+    : index + (forward ? 1 : -1);
+  const next = stops[nextIndex];
+  if (next) {
+    focusScreenElement(next);
+    return;
+  }
+  if (scope !== screen && scrollCollection(scope, forward, true)) return;
+
+  // This collection has reached its real beginning/end. Continue into the
+  // surrounding Android screen (for example, from EatClub's content into its
+  // Home/Explore/Earn/Favourites/My Offers navigation bar) without requiring Tab.
+  const allStops = [...screen.querySelectorAll('[data-id]')]
+    .filter((el) => el._desc && !containers.has(el._desc.kind));
+  const globalIndex = allStops.indexOf(current);
+  const outside = allStops[globalIndex + (forward ? 1 : -1)];
+  if (outside) focusScreenElement(outside);
+}
+
 screen.addEventListener('click', (e) => {
   const more = e.target.closest('[data-scroll]');
   if (more) {
@@ -520,6 +623,13 @@ screen.addEventListener('change', (e) => {
 
 screen.addEventListener('keydown', (e) => {
   const el = e.target;
+  const editing = el.matches?.('input, textarea, select, [contenteditable="true"]');
+  if (!editing && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey
+      && (e.key === 'ArrowDown' || e.key === 'ArrowUp') && el.closest?.('[data-id]')) {
+    e.preventDefault();
+    moveScreenFocus(e.key === 'ArrowDown', el);
+    return;
+  }
   if (e.key === 'Enter' && el.tagName === 'INPUT' && el.type !== 'range' && el.dataset.id) {
     e.preventDefault();
     invoke('act', { id: el.dataset.id, action: 'imeEnter' });
@@ -564,7 +674,17 @@ const SHORTCUTS = [
     id: 'notifications', what: 'Android notifications (new ones are also announced as they arrive)',
     run: () => invoke('global', { action: 'notifications' }),
     win: ['Alt+N', (e) => e.altKey && e.key.toLowerCase() === 'n'],
-    mac: ['Cmd+Shift+N', (e) => e.metaKey && e.shiftKey && e.key.toLowerCase() === 'n'],
+    mac: ['Cmd+N', (e) => e.metaKey && !e.shiftKey && e.key.toLowerCase() === 'n'],
+  },
+  {
+    id: 'next-items', what: 'Next screen of items in a long Android list', run: () => scrollPage(true),
+    win: ['Alt+Page Down', (e) => e.altKey && e.key === 'PageDown'],
+    mac: ['Option+Page Down', (e) => e.altKey && e.key === 'PageDown'],
+  },
+  {
+    id: 'previous-items', what: 'Previous screen of items in a long Android list', run: () => scrollPage(false),
+    win: ['Alt+Page Up', (e) => e.altKey && e.key === 'PageUp'],
+    mac: ['Option+Page Up', (e) => e.altKey && e.key === 'PageUp'],
   },
   {
     id: 'install', what: 'Find an app on Google Play: type its name, or paste a link', run: () => openInstall(),
@@ -626,6 +746,39 @@ $('btn-back').addEventListener('click', () => invoke('global', { action: 'back' 
 $('btn-notifications').addEventListener('click', () => invoke('global', { action: 'notifications' }));
 $('btn-install').addEventListener('click', openInstall);
 $('btn-help').addEventListener('click', () => $('help-dialog').showModal());
+for (const id of ['btn-apps', 'btn-notifications', 'btn-install', 'btn-help']) {
+  $(id).addEventListener('click', () => { $('main-menu').open = false; });
+}
+
+let displayModeLoaded = false;
+
+function showDisplayMode(mode) {
+  if (mode !== 'phone' && mode !== 'tablet') return;
+  displayModeLoaded = true;
+  $('btn-phone-mode').disabled = mode === 'phone';
+  $('btn-tablet-mode').disabled = mode === 'tablet';
+  setAttr($('btn-phone-mode'), 'aria-pressed', String(mode === 'phone'));
+  setAttr($('btn-tablet-mode'), 'aria-pressed', String(mode === 'tablet'));
+}
+
+async function readDisplayMode() {
+  const current = await invoke('display_mode');
+  showDisplayMode(current);
+}
+
+async function chooseDisplayMode(mode) {
+  // Move focus before the chosen button becomes disabled.
+  $('main-menu').open = false;
+  $('main-menu').querySelector('summary').focus();
+  $('btn-phone-mode').disabled = true;
+  $('btn-tablet-mode').disabled = true;
+  const applied = await invoke('set_display_mode', { mode });
+  showDisplayMode(applied);
+  if (!applied) readDisplayMode();
+}
+
+$('btn-phone-mode').addEventListener('click', () => chooseDisplayMode('phone'));
+$('btn-tablet-mode').addEventListener('click', () => chooseDisplayMode('tablet'));
 
 // ------------------------------------------------------------------ first-run setup
 
@@ -784,6 +937,7 @@ function applyState(state) {
   setText($('status'), state.status);
   setText($('starting-message'), state.status);
   setMode(state.mode);
+  if (state.connected && !displayModeLoaded) readDisplayMode();
 }
 
 async function start() {

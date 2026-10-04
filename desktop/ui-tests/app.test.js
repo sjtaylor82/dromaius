@@ -23,6 +23,8 @@ async function load({ mac = false } = {}) {
         if (cmd === 'init') {
           return { apps: [], screen: null, setup: null, about: null, state: { connected: true, status: 'Connected', mode: 'app' } };
         }
+        if (cmd === 'display_mode') return 'phone';
+        if (cmd === 'set_display_mode') return args.mode;
         return null;
       },
     },
@@ -126,7 +128,151 @@ test('grids become tables with rows and cells', async () => {
   assert.equal(rows.length, 3, 'two rows plus the "Show more items" row');
   assert.equal(rows[0].querySelectorAll('[role=cell]').length, 2);
   assert.equal(el('c2').parentElement.getAttribute('aria-colindex'), '2');
-  assert.equal(rows[2].textContent, 'Show more items');
+  assert.match(rows[2].textContent, /^Show more items/);
+});
+
+test('list paging shortcuts work without finding the scroll buttons', async () => {
+  const { w, calls, screen } = await load();
+  screen([{
+    id: 'l', kind: 'list', label: 'Restaurants', more: true, less: true,
+    children: [{ id: 'i', kind: 'listitem', label: 'Restaurant', clickable: true }],
+  }]);
+
+  w.document.dispatchEvent(new w.KeyboardEvent('keydown', {
+    key: 'PageDown', altKey: true, bubbles: true,
+  }));
+  w.document.dispatchEvent(new w.KeyboardEvent('keydown', {
+    key: 'PageUp', altKey: true, bubbles: true,
+  }));
+
+  assert.deepEqual(calls.filter(([cmd]) => cmd === 'scroll'), [
+    ['scroll', { id: 'l', forward: true }],
+    ['scroll', { id: 'l', forward: false }],
+  ]);
+});
+
+test('focus-mode arrows work only when focus is inside the Android screen', async () => {
+  const { w, doc, calls, screen, el } = await load();
+  screen([
+    {
+      id: 'l', kind: 'list', label: 'Restaurants', more: true,
+      children: [
+        { id: 'a', kind: 'listitem', label: 'Alpha', clickable: true },
+        { id: 'b', kind: 'listitem', label: 'Bravo', clickable: true },
+      ],
+    },
+    { id: 'outside', kind: 'button', label: 'Outside the list', clickable: true },
+  ]);
+
+  el('a').focus();
+  el('a').dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+  assert.equal(doc.activeElement, el('b'));
+
+  el('b').dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+  el('b').dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+  assert.deepEqual(calls.filter(([cmd]) => cmd === 'scroll').at(-1),
+    ['scroll', { id: 'l', forward: true }]);
+  assert.equal(calls.filter(([cmd]) => cmd === 'scroll').length, 1,
+    'key repeat cannot start a second scroll before focus arrives');
+  assert.equal(doc.activeElement, doc.querySelector('#scroll-focus-anchor'),
+    'parks focus on a stable anchor while Android changes the collection');
+  assert.equal(doc.querySelector('#live').textContent, '', 'vertical navigation scrolls silently');
+
+  // RecyclerViews can replace the focused node in a follow-up snapshot after
+  // the backend's one-time focus hint. Focus must remain in the new page.
+  screen([{
+    id: 'l', kind: 'list', label: 'Restaurants', more: true, less: true,
+    children: [
+      { id: 'c', kind: 'listitem', label: 'Charlie', clickable: true },
+      { id: 'd', kind: 'listitem', label: 'Delta', clickable: true },
+    ],
+  }]);
+  assert.equal(doc.activeElement, doc.querySelector('#scroll-focus-anchor'),
+    'does not focus an unconfirmed snapshot');
+
+  screen([{
+    id: 'l', kind: 'list', label: 'Restaurants', more: true, less: true,
+    children: [
+      { id: 'c', kind: 'listitem', label: 'Charlie', clickable: true },
+      { id: 'd', kind: 'listitem', label: 'Delta', clickable: true },
+    ],
+  }], { focus: 'd' });
+  assert.equal(doc.activeElement, el('d'), 'uses the backend target once it is stable');
+  assert.equal(doc.querySelector('#scroll-focus-anchor').hidden, true);
+
+  doc.querySelector('#screen-title').focus();
+  doc.querySelector('#screen-title').dispatchEvent(
+    new w.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }),
+  );
+  assert.equal(doc.activeElement, doc.querySelector('#screen-title'));
+});
+
+test('secondary commands are grouped behind the menu and it closes after use', async () => {
+  const { doc } = await load();
+  const menu = doc.querySelector('#main-menu');
+  assert.ok(menu);
+  assert.equal(menu.querySelector('summary').textContent, 'Menu');
+  assert.deepEqual([...menu.querySelectorAll('button')].map((button) => button.textContent), [
+    'Apps', 'Notifications', 'Install from Google Play', 'Keyboard help',
+    'Phone mode, about 6 inches', 'Tablet mode, about 11 inches',
+  ]);
+  assert.equal(menu.querySelector('.menu-items').lastElementChild.id, 'status');
+  menu.open = true;
+  doc.querySelector('#btn-help').click();
+  assert.equal(menu.open, false);
+});
+
+test('phone and tablet choices show the current mode and apply the other one', async () => {
+  const { doc, calls } = await load();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(doc.querySelector('#btn-phone-mode').disabled, true);
+  assert.equal(doc.querySelector('#btn-phone-mode').getAttribute('aria-pressed'), 'true');
+  assert.equal(doc.querySelector('#btn-tablet-mode').disabled, false);
+
+  doc.querySelector('#main-menu').open = true;
+  doc.querySelector('#btn-tablet-mode').click();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(calls.filter(([cmd]) => cmd === 'set_display_mode').at(-1),
+    ['set_display_mode', { mode: 'tablet' }]);
+  assert.equal(doc.querySelector('#btn-tablet-mode').disabled, true);
+  assert.equal(doc.querySelector('#btn-tablet-mode').getAttribute('aria-pressed'), 'true');
+  assert.equal(doc.querySelector('#main-menu').open, false);
+  assert.equal(doc.activeElement, doc.querySelector('#main-menu summary'));
+});
+
+test('focus-mode arrows remain native inside Android edit fields', async () => {
+  const { w, doc, calls, screen, el } = await load();
+  screen([
+    { id: 'e', kind: 'edit', label: 'Search', value: 'text' },
+    { id: 'b', kind: 'button', label: 'Search', clickable: true },
+  ]);
+  el('e').focus();
+  el('e').dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+  assert.equal(doc.activeElement, el('e'));
+  assert.equal(calls.filter(([cmd]) => cmd === 'scroll').length, 0);
+});
+
+test('arrows leave a finished collection without requiring Tab', async () => {
+  const { w, doc, calls, screen, el } = await load();
+  screen([
+    {
+      id: 'l', kind: 'list', label: 'Offers',
+      children: [
+        { id: 'a', kind: 'listitem', label: 'First offer', clickable: true },
+        { id: 'b', kind: 'listitem', label: 'Last offer', clickable: true },
+      ],
+    },
+    { id: 'home', kind: 'button', label: 'Home', clickable: true },
+    { id: 'offers', kind: 'button', label: 'My Offers', clickable: true },
+  ]);
+
+  el('b').focus();
+  el('b').dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+  assert.equal(doc.activeElement, el('home'));
+  assert.equal(calls.filter(([cmd]) => cmd === 'scroll').length, 0);
+
+  el('home').dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true }));
+  assert.equal(doc.activeElement, el('b'));
 });
 
 test('typing is not overwritten by late echoes, but app changes are shown', async () => {

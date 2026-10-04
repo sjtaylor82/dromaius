@@ -2,6 +2,9 @@ DROMAIUS 0.1.0
 
 Use Android apps on Windows with your screen reader and keyboard.
 
+Dromaius is an independent accessibility project and is not affiliated with or
+endorsed by Google. Android and Google Play are trademarks of Google LLC.
+
 Dromaius runs Google's official Android Emulator in the background and turns
 Android screens into accessible web pages. NVDA, JAWS and Narrator can use
 browse mode, quick-navigation keys, the elements list and Say All. You can
@@ -41,10 +44,14 @@ Ctrl+L                    Find an app on Google Play
 Shift+F10 or Applications More actions, including long press
 F5                        Refresh
 Alt+N                     Android notifications
+Alt+Page Down             Next screen of items in a long Android list
+Alt+Page Up               Previous screen of items in a long Android list
 F1                        Keyboard help
 
-Long lists show only what currently fits on Android's screen. Use "Show more
-items" or "Show earlier items" to move through them.
+Long lists show only what currently fits on Android's screen. Press Alt+Page
+Down or Alt+Page Up from anywhere on the screen to move through them. You can
+also turn off browse mode while focused on an Android item. Up and Down Arrow
+then move through the items and scroll Android at either end.
 
 
 GOOD TO KNOW
@@ -70,5 +77,3 @@ apps and your Google sign-in, delete:
 %LOCALAPPDATA%\com.dromaius.desktop
 %USERPROFILE%\.android\avd\Dromaius.avd
 %USERPROFILE%\.android\avd\Dromaius.ini
-
-

@@ -10,13 +10,20 @@
 <body>
   <header>
     <nav aria-label="Dromaius">
-      <button type="button" id="btn-apps" title="Alt+Home">Apps</button>
       <button type="button" id="btn-back" title="Alt+Left">Back</button>
-      <button type="button" id="btn-notifications" title="Alt+N">Notifications</button>
-      <button type="button" id="btn-install" title="Ctrl+L">Install from Google Play</button>
-      <button type="button" id="btn-help" title="F1">Keyboard help</button>
+      <details id="main-menu">
+        <summary>Menu</summary>
+        <div class="menu-items">
+          <button type="button" id="btn-apps" title="Alt+Home">Apps</button>
+          <button type="button" id="btn-notifications" title="Alt+N">Notifications</button>
+          <button type="button" id="btn-install" title="Ctrl+L">Install from Google Play</button>
+          <button type="button" id="btn-help" title="F1">Keyboard help</button>
+          <button type="button" id="btn-phone-mode" disabled>Phone mode, about 6 inches</button>
+          <button type="button" id="btn-tablet-mode" disabled>Tablet mode, about 11 inches</button>
+          <p id="status">Starting Android</p>
+        </div>
+      </details>
     </nav>
-    <p id="status">Starting Android</p>
   </header>
 
   <main>
@@ -55,6 +62,7 @@
 
     <section id="app-view" hidden>
       <h1 id="screen-title" tabindex="-1"></h1>
+      <button type="button" id="scroll-focus-anchor" class="visually-hidden" tabindex="-1" hidden></button>
       <div id="screen"></div>
     </section>
   </main>
@@ -102,7 +110,7 @@
       <h2 id="help-title">Keyboard help</h2>
       <p>Android screens are shown as a web page, so your screen reader's browse mode, quick navigation keys, elements list and say all all work.</p>
       <dl id="shortcut-list"></dl>
-      <p>Long lists show only what fits on the Android screen. Use the "Show more items" button at the end of a list to load more.</p>
+      <p>For long lists, use the next-items and previous-items keyboard commands, or the buttons at the ends of the list. In focus mode, Up and Down Arrow move through Android items. At the boundary of a scrollable collection, Dromaius scrolls that collection rather than moving to another part of the screen.</p>
       <h3>About</h3>
       <dl id="about-list"><dt>Dromaius</dt><dd>Starting</dd></dl>
       <div class="buttons">

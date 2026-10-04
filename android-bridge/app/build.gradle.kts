@@ -11,6 +11,9 @@ val signingProps = Properties().apply {
     val file = File(signingDir, "keystore.properties")
     if (file.exists()) file.inputStream().use { load(it) }
 }
+if (signingProps.isEmpty && gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }) {
+    throw GradleException("Release signing credentials are missing; refusing to create an unsigned or debug-signed bridge")
+}
 
 android {
     namespace = "com.dromaius.bridge"
@@ -38,7 +41,9 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+            // Never let a distributable-looking release silently use Android's
+            // well-known debug key. mac-test consumes the separately signed APK.
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 

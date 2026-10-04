@@ -4,7 +4,9 @@ import android.net.LocalServerSocket
 import android.net.LocalSocket
 import android.util.Log
 import org.json.JSONObject
+import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.OutputStream
 
@@ -57,20 +59,41 @@ class BridgeServer(
             }
             onConnected()
             try {
-                socket.inputStream.bufferedReader(Charsets.UTF_8).forEachLine { line ->
-                    if (line.isBlank()) return@forEachLine
-                    try {
-                        onCommand(JSONObject(line))
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Bad command: $line", e)
-                    }
-                }
+                readCommands(socket)
             } catch (e: IOException) {
                 Log.i(TAG, "Client disconnected: ${e.message}")
             }
             synchronized(lock) {
                 if (client === socket) closeClientLocked()
             }
+        }
+    }
+
+    /** Reads bounded lines so a faulty or hostile adb client cannot exhaust memory. */
+    private fun readCommands(socket: LocalSocket) {
+        val input = BufferedInputStream(socket.inputStream, 64 * 1024)
+        val line = ByteArrayOutputStream()
+        var oversized = false
+        while (!isInterrupted) {
+            val byte = input.read()
+            if (byte == -1) return
+            if (byte != '\n'.code) {
+                if (!oversized && line.size() < MAX_COMMAND_BYTES) line.write(byte)
+                else oversized = true
+                continue
+            }
+            if (oversized) {
+                Log.w(TAG, "Rejected oversized command")
+            } else if (line.size() > 0) {
+                try {
+                    onCommand(JSONObject(line.toString(Charsets.UTF_8.name())))
+                } catch (e: Exception) {
+                    // Do not log command contents: they can contain typed passwords.
+                    Log.w(TAG, "Rejected invalid command", e)
+                }
+            }
+            line.reset()
+            oversized = false
         }
     }
 
@@ -98,5 +121,6 @@ class BridgeServer(
         private const val TAG = "DromaiusBridge"
         private const val SHELL_UID = 2000
         private const val ROOT_UID = 0
+        private const val MAX_COMMAND_BYTES = 1024 * 1024
     }
 }

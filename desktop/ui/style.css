@@ -38,7 +38,34 @@ header {
 }
 
 header nav { display: flex; flex-wrap: wrap; gap: 8px; }
-#status { margin: 0; color: var(--muted); }
+#status {
+  margin: 6px 6px 0;
+  padding-top: 6px;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+}
+
+#main-menu { position: relative; }
+#main-menu summary {
+  cursor: default;
+  list-style: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 12px;
+}
+#main-menu summary::-webkit-details-marker { display: none; }
+.menu-items {
+  position: absolute;
+  z-index: 10;
+  min-width: 230px;
+  margin-top: 4px;
+  padding: 6px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgb(0 0 0 / 20%);
+}
+.menu-items button { display: block; width: 100%; border: 0; }
 
 main { padding: 16px; max-width: 760px; }
 
