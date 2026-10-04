@@ -36,7 +36,7 @@ Windows / macOS                                    Android Emulator (hidden)
 | Shift+F10 / Applications key | VoiceOver+Shift+M | More actions: long press, app-specific actions, expand |
 | F5 | Cmd+R | Refresh |
 | Alt+N | Option+N | Android notifications |
-| F7 | Fn+F7 | Push to talk like a physical PTT button: holds Android key F12 down until pressed again (assign it in apps such as Zello) |
+| F7 | Fn+F7 | Push to talk: holds the app's on-screen push-to-talk control (or, without one, Android key F12 as a hardware PTT key) until pressed again |
 | F8 | Fn+F8 | Tap and hold the focused item |
 | Alt+Page Down | Option+Page Down | Next screen of items in a long Android list |
 | Alt+Page Up | Option+Page Up | Previous screen of items in a long Android list |

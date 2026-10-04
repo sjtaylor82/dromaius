@@ -739,15 +739,48 @@ function currentNode() {
   return document.activeElement?.closest?.('#screen [data-id]') || null;
 }
 
-// Push-to-talk: F7 works like a phone's physical PTT button. The first
-// press holds Android's PTT key (F12) down, the next releases it. Apps such
-// as Zello let you assign it as their PTT button.
-let talking = false;
+// Push-to-talk: F7 works like a phone's PTT button. It finds the app's
+// on-screen push-to-talk control and holds it down until the next F7; with no
+// such control it holds Android's hardware PTT key (F12) instead, which apps
+// such as Zello let you assign as their PTT button.
+const PTT_LABELS = [/push[\s-]*to[\s-]*talk/i, /hold[\s-]*to[\s-]*talk/i, /ptt/i, /^talk$/i, /talk/i, /transmit/i];
+let talking = null;
+
+/** The best push-to-talk control on the current screen, if any. */
+function findPttControl() {
+  const candidates = [];
+  const walk = (nodes) => {
+    for (const n of nodes || []) {
+      if (n.clickable || n.longClickable) candidates.push(n);
+      walk(n.children);
+    }
+  };
+  walk(lastScreen?.nodes);
+  for (const pattern of PTT_LABELS) {
+    const hit = candidates.find((n) => pattern.test(n.label || ''));
+    if (hit) return hit;
+  }
+  return null;
+}
 
 function toggleTalk() {
-  talking = !talking;
-  invoke('ptt_key', { down: talking });
-  announce(talking ? 'Talking' : 'Stopped talking');
+  if (talking) {
+    if (talking === 'key') invoke('ptt_key', { down: false });
+    else invoke('release');
+    talking = null;
+    announce('Stopped talking');
+    return;
+  }
+  const control = mode === 'app' ? findPttControl() : null;
+  if (control) {
+    invoke('act', { id: control.id, action: 'touchDown' });
+    talking = 'touch';
+    announce(`Talking, holding ${control.label}`);
+  } else {
+    invoke('ptt_key', { down: true });
+    talking = 'key';
+    announce('Talking, using the PTT key');
+  }
 }
 
 function tapAndHold() {

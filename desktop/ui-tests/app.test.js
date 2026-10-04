@@ -392,6 +392,7 @@ test('F7 works like a PTT button whatever is focused; F8 taps and holds', async 
   const { w, screen, el, calls } = await load();
   screen([{ id: 't', kind: 'button', label: 'Photo', clickable: true, longClickable: true }]);
   el('t').focus();
+  // No push-to-talk control on screen: the hardware PTT key.
   assert.equal(press(w, { key: 'F7' }), true);
   assert.deepEqual(calls.at(-1), ['ptt_key', { down: true }]);
   assert.equal(press(w, { key: 'F7' }), true);
@@ -412,4 +413,18 @@ test('F8 on an app in Your apps offers Open, App info and Uninstall', async () =
   assert.equal(doc.getElementById('actions-title').textContent, 'EatClub');
   doc.querySelectorAll('#actions-list button')[2].click();
   assert.deepEqual(calls.at(-1), ['uninstall', { package: 'dinnerdeal.android.customer' }]);
+});
+
+test('F7 finds and holds the on-screen push-to-talk control', async () => {
+  const { w, screen, calls } = await load();
+  screen([
+    { id: 'm', kind: 'button', label: 'Menu', clickable: true },
+    { id: 'l', kind: 'list', label: '', children: [
+      { id: 'p', kind: 'button', label: 'Push to talk', clickable: true },
+    ] },
+  ]);
+  assert.equal(press(w, { key: 'F7' }), true);
+  assert.deepEqual(calls.at(-1), ['act', { id: 'p', action: 'touchDown' }]);
+  press(w, { key: 'F7' });
+  assert.deepEqual(calls.at(-1), ['release', undefined]);
 });
