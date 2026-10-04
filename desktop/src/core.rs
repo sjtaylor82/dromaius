@@ -15,6 +15,33 @@ use crate::mirror::{ANDROID_ID_BIT, Model};
 use crate::protocol::{AppInfo, FromBridge, Snapshot, ToBridge};
 use crate::view::{self, ViewNode};
 
+#[cfg(target_os = "windows")]
+const MESSENGER_PACKAGE: &str = "com.facebook.orca";
+
+#[cfg(target_os = "windows")]
+fn messenger_request(input: &str) -> bool {
+    let input = input.trim().to_ascii_lowercase();
+    device::package_from_link(&input).as_deref() == Some(MESSENGER_PACKAGE)
+        || matches!(
+            input.as_str(),
+            "messenger" | "facebook messenger" | "meta messenger"
+        )
+}
+
+fn apps_for_desktop(mut apps: Vec<AppInfo>) -> Vec<AppInfo> {
+    #[cfg(target_os = "windows")]
+    {
+        apps.retain(|app| app.package != MESSENGER_PACKAGE);
+        apps.push(AppInfo {
+            package: MESSENGER_PACKAGE.into(),
+            label: "Messenger (opens in browser)".into(),
+            web: true,
+        });
+        apps.sort_by_key(|app| app.label.to_ascii_lowercase());
+    }
+    apps
+}
+
 pub enum BackendEvent {
     Setup(SetupPayload),
     About(AboutPayload),
@@ -177,6 +204,8 @@ pub struct Core {
     license_reply: Option<Sender<bool>>,
     about: Option<AboutPayload>,
     bridge_started: bool,
+    #[cfg(target_os = "windows")]
+    last_messenger_redirect: Option<Instant>,
     /// An update is running (Android may be restarting).
     maintenance: bool,
 }
@@ -205,6 +234,8 @@ impl Core {
             license_reply: None,
             about: None,
             bridge_started: false,
+            #[cfg(target_os = "windows")]
+            last_messenger_redirect: None,
             maintenance: false,
         }
     }
@@ -401,7 +432,7 @@ impl Core {
                 }
             }
             FromBridge::Apps { apps } => {
-                self.apps = apps;
+                self.apps = apps_for_desktop(apps);
                 let _ = self.app.emit("apps", &self.apps);
             }
             FromBridge::Tree(snap) => self.on_snapshot(snap),
@@ -427,7 +458,27 @@ impl Core {
                     );
                 }
             }
-            FromBridge::WindowChanged { .. } => {}
+            FromBridge::WindowChanged { package } => {
+                #[cfg(target_os = "windows")]
+                if package == MESSENGER_PACKAGE
+                    && self
+                        .last_messenger_redirect
+                        .is_none_or(|at| at.elapsed() > Duration::from_secs(3))
+                {
+                    self.last_messenger_redirect = Some(Instant::now());
+                    self.announce("Opening Messenger in your browser");
+                    self.set_mode(Mode::Apps);
+                    let device = self.device.clone();
+                    std::thread::spawn(move || {
+                        if let Some(device) = device {
+                            let _ = device.force_stop(MESSENGER_PACKAGE);
+                        }
+                        if let Err(e) = crate::open_messenger_web() {
+                            eprintln!("could not open Messenger in the browser: {e}");
+                        }
+                    });
+                }
+            }
             FromBridge::Result { req, ok, error } => {
                 if ok {
                     return;
@@ -710,6 +761,37 @@ impl Core {
         });
     }
 
+    /// Sends a browser shortcut (Ctrl+L, Ctrl+T) to the app in front.
+    pub fn ctrl_key(&mut self, key: &str) {
+        if !["L", "T"].contains(&key) {
+            return;
+        }
+        let Some(d) = self.device.clone() else {
+            return self.announce("Not connected to Android");
+        };
+        let key = key.to_string();
+        std::thread::spawn(move || {
+            if let Err(e) = d.ctrl_key(&key) {
+                eprintln!("Ctrl+{key} failed: {e:#}");
+            }
+        });
+    }
+
+    pub fn navigation_key(&mut self, key: &str) {
+        if key != "DPAD_DOWN" {
+            return;
+        }
+        let Some(device) = self.device.clone() else {
+            return self.announce("Not connected to Android");
+        };
+        let key = key.to_string();
+        std::thread::spawn(move || {
+            if let Err(e) = device.navigation_key(&key) {
+                eprintln!("Android navigation key failed: {e:#}");
+            }
+        });
+    }
+
     pub fn set_text(&mut self, id: u64, text: &str, start: usize, end: usize) {
         self.send(ToBridge::SetText {
             id,
@@ -850,6 +932,14 @@ impl Core {
     pub fn install_link(&mut self, input: &str) {
         let input = input.trim();
         if input.is_empty() {
+            return;
+        }
+        #[cfg(target_os = "windows")]
+        if messenger_request(input) {
+            self.announce("Opening Messenger in your browser");
+            if let Err(e) = crate::open_messenger_web() {
+                self.announce(&e);
+            }
             return;
         }
         let Some(device) = self.device.clone() else {
@@ -1300,6 +1390,31 @@ fn size_text(bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn recognises_messenger_install_requests() {
+        assert!(super::messenger_request("Messenger"));
+        assert!(super::messenger_request("facebook messenger"));
+        assert!(super::messenger_request("com.facebook.orca"));
+        assert!(super::messenger_request(
+            "https://play.google.com/store/apps/details?id=com.facebook.orca&hl=en"
+        ));
+        assert!(!super::messenger_request("Messenger Kids"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn replaces_android_messenger_with_one_web_app() {
+        let apps = super::apps_for_desktop(vec![crate::protocol::AppInfo {
+            package: "com.facebook.orca".into(),
+            label: "Messenger".into(),
+            web: false,
+        }]);
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].label, "Messenger (opens in browser)");
+        assert!(apps[0].web);
+    }
+
     #[test]
     #[ignore = "needs internet and an installed SDK"]
     fn reports_versions() {

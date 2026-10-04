@@ -32,11 +32,14 @@ Windows / macOS                                    Android Emulator (hidden)
 |---|---|---|
 | Alt+H | Option+H | Your apps |
 | Alt+Left | Cmd+[ | Android Back |
-| Ctrl+L | Cmd+L | Install from a Google Play link or package name |
+| Alt+S | Option+S | Install from a Google Play link or package name |
+| Ctrl+L | Cmd+L | In a browser such as Chrome: go to the address bar |
+| Ctrl+T | Cmd+T | In a browser such as Chrome: open a new tab |
 | Shift+F10 / Applications key | VoiceOver+Shift+M | More actions: long press, app-specific actions, expand |
 | F5 | Cmd+R | Refresh |
 | Alt+N | Option+N | Android notifications |
-| F7 | Fn+F7 | Push to talk: holds the app's on-screen push-to-talk control (or, without one, Android key F12 as a hardware PTT key) until pressed again |
+| F7 | Fn+F7 | Talk: presses the app's on-screen talk or record button once (or, without one, holds Android key F12 as a hardware PTT key until pressed again) |
+| Shift+F7 | Fn+Shift+F7 | Push to talk: holds the app's on-screen talk or record button until pressed again |
 | F8 | Fn+F8 | Tap and hold the focused item |
 | Alt+Page Down | Option+Page Down | Next screen of items in a long Android list |
 | Alt+Page Up | Option+Page Up | Previous screen of items in a long Android list |
@@ -180,6 +183,12 @@ notifications, quickSettings), and `action` on a node (`click`, `longClick`,
 
 - Apps that check for a real device (some banking and streaming apps) may not
   install or run on the emulator.
+- On Windows, **Messenger (opens in browser)** is always available in **Your
+  apps**. Messenger searches and Play links use its supported website in the
+  default browser instead of installing the ARM-only Android build, whose native
+  startup code currently crashes under Android's x86 translation layer. If
+  Android tries to open an existing installation, Dromaius redirects it to the
+  browser. Apple Silicon Macs continue to run the Android app.
 - Content drawn without accessibility information (most games) can't be mirrored.
 - Google sign-in has to be done once, through the mirrored Android screens.
 

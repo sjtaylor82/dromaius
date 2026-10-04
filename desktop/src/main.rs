@@ -10,6 +10,8 @@ mod timing;
 mod view;
 
 use std::path::PathBuf;
+#[cfg(target_os = "windows")]
+use std::process::Command;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -63,6 +65,15 @@ fn parse_args() -> Result<Options, String> {
 
 type Shared = Arc<Mutex<Core>>;
 
+#[cfg(target_os = "windows")]
+pub(crate) fn open_messenger_web() -> Result<(), String> {
+    Command::new("rundll32.exe")
+        .args(["url.dll,FileProtocolHandler", "https://www.messenger.com/"])
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Could not open Messenger in your browser: {e}"))
+}
+
 fn with_node(id: &str, f: impl FnOnce(u64)) -> Result<(), String> {
     f(parse_id(id).ok_or_else(|| format!("bad id {id}"))?);
     Ok(())
@@ -96,6 +107,16 @@ fn release(core: State<Shared>) {
 #[tauri::command]
 fn ptt_key(core: State<Shared>, down: bool) {
     core.lock().unwrap().ptt_key(down);
+}
+
+#[tauri::command]
+fn ctrl_key(core: State<Shared>, key: String) {
+    core.lock().unwrap().ctrl_key(&key);
+}
+
+#[tauri::command]
+fn navigation_key(core: State<Shared>, key: String) {
+    core.lock().unwrap().navigation_key(&key);
 }
 
 #[tauri::command]
@@ -172,8 +193,19 @@ fn show_apps(core: State<Shared>) {
 }
 
 #[tauri::command]
-fn launch(core: State<Shared>, package: String) {
+fn launch(core: State<Shared>, package: String) -> Result<(), String> {
+    // Google Play currently supplies Messenger only as ARM native code. On an
+    // x86 Windows emulator it is translated at runtime and crashes during
+    // startup in libsuperpack-jni.so. Use Meta's supported web client in the
+    // system browser, which also owns its login, notification, camera and
+    // microphone permissions. Apple Silicon can run the Android build natively.
+    #[cfg(target_os = "windows")]
+    if package == "com.facebook.orca" {
+        return open_messenger_web();
+    }
+
     core.lock().unwrap().launch(&package);
+    Ok(())
 }
 
 #[tauri::command]
@@ -240,6 +272,8 @@ fn main() {
             start_update,
             release,
             ptt_key,
+            ctrl_key,
+            navigation_key,
             app_info,
             uninstall
         ])

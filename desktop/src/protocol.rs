@@ -35,7 +35,10 @@ pub enum FromBridge {
         #[serde(default)]
         text: String,
     },
-    WindowChanged {},
+    WindowChanged {
+        #[serde(default)]
+        package: String,
+    },
     Result {
         req: u64,
         ok: bool,
@@ -48,6 +51,9 @@ pub enum FromBridge {
 pub struct AppInfo {
     pub package: String,
     pub label: String,
+    /// A desktop web app presented alongside the installed Android apps.
+    #[serde(default)]
+    pub web: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]

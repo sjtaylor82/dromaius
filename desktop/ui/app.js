@@ -20,6 +20,8 @@ let pendingPageFocus = null;
 let pageFocusFallback = null;
 /** Values we recently sent per edit field, to ignore Android echoing them back late. */
 const sentValues = new Map();
+/** Promise tail per edit field: native text actions must arrive in typing order. */
+const textSends = new Map();
 
 // ------------------------------------------------------------------ helpers
 
@@ -102,6 +104,7 @@ function renderApps(list) {
       button.dataset.package = app.package;
       li.append(button);
     }
+    setAttr(li.firstChild, 'data-web', app.web ? 'true' : null);
     setText(li.firstChild, app.label);
     if (ul.children[i] !== li) ul.insertBefore(li, ul.children[i] || null);
   });
@@ -438,6 +441,16 @@ function rememberSent(id, value) {
   sentValues.set(id, list);
 }
 
+function sendText(id, text, start, end) {
+  const previous = textSends.get(id);
+  const send = () => invoke('set_text', { id, text, start, end });
+  const current = previous ? previous.then(send) : send();
+  textSends.set(id, current);
+  current.finally(() => {
+    if (textSends.get(id) === current) textSends.delete(id);
+  });
+}
+
 // ------------------------------------------------------------------ actions menu
 
 function openActions(el) {
@@ -619,7 +632,7 @@ screen.addEventListener('input', (e) => {
   if (!el.dataset.id) return;
   if (el.type === 'range') return;
   rememberSent(el.dataset.id, el.value);
-  invoke('set_text', { id: el.dataset.id, text: el.value, start: el.selectionStart ?? el.value.length, end: el.selectionEnd ?? el.value.length });
+  sendText(el.dataset.id, el.value, el.selectionStart ?? el.value.length, el.selectionEnd ?? el.value.length);
 });
 
 screen.addEventListener('change', (e) => {
@@ -630,6 +643,14 @@ screen.addEventListener('change', (e) => {
 screen.addEventListener('keydown', (e) => {
   const el = e.target;
   const editing = el.matches?.('input, textarea, select, [contenteditable="true"]');
+  // A desktop input owns its cursor keys, so Android would never otherwise
+  // receive Down Arrow to open or enter an app's autocomplete suggestions.
+  if (e.key === 'ArrowDown' && el.tagName === 'INPUT' && el.type !== 'range'
+      && el.dataset.id && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+    e.preventDefault();
+    invoke('navigation_key', { key: 'DPAD_DOWN' });
+    return;
+  }
   if (!editing && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey
       && (e.key === 'ArrowDown' || e.key === 'ArrowUp') && el.closest?.('[data-id]')) {
     e.preventDefault();
@@ -699,8 +720,23 @@ const SHORTCUTS = [
   },
   {
     id: 'install', what: 'Find an app on Google Play: type its name, or paste a link', run: () => openInstall(),
-    win: ['Ctrl+L', (e) => e.ctrlKey && e.key.toLowerCase() === 'l'],
-    mac: ['Cmd+L', (e) => e.metaKey && e.key.toLowerCase() === 'l'],
+    // Alt+S on both (Option+S on a Mac, matched by key code). Ctrl+L / Cmd+L
+    // is left free: it is the address-bar key in browsers.
+    win: ['Alt+S', (e) => e.altKey && !e.shiftKey && e.code === 'KeyS'],
+    mac: ['Option+S', (e) => e.altKey && !e.shiftKey && e.code === 'KeyS'],
+  },
+  {
+    id: 'address-bar', what: 'In a browser such as Chrome: go to the address bar',
+    run: () => invoke('ctrl_key', { key: 'L' }),
+    // Only inside an Android app, so the keys stay free everywhere else.
+    win: ['Ctrl+L', (e) => mode === 'app' && e.ctrlKey && !e.altKey && !e.shiftKey && e.code === 'KeyL'],
+    mac: ['Cmd+L', (e) => mode === 'app' && e.metaKey && !e.altKey && !e.shiftKey && e.code === 'KeyL'],
+  },
+  {
+    id: 'new-tab', what: 'In a browser such as Chrome: open a new tab',
+    run: () => invoke('ctrl_key', { key: 'T' }),
+    win: ['Ctrl+T', (e) => mode === 'app' && e.ctrlKey && !e.altKey && !e.shiftKey && e.code === 'KeyT'],
+    mac: ['Cmd+T', (e) => mode === 'app' && e.metaKey && !e.altKey && !e.shiftKey && e.code === 'KeyT'],
   },
   {
     id: 'refresh', what: 'Refresh the screen', run: () => { invoke('refresh'); announce('Refreshing'); },
@@ -708,13 +744,19 @@ const SHORTCUTS = [
     mac: ['Cmd+R', (e) => e.metaKey && !e.shiftKey && e.key.toLowerCase() === 'r'],
   },
   {
-    id: 'talk', what: "Push to talk, like a phone's PTT button: press once to start, again to stop. In apps such as Zello, assign it as the PTT button by pressing it when asked",
-    run: () => toggleTalk(),
+    id: 'talk', what: "Press the app's talk or record button once. With no such button on screen it holds the PTT key until pressed again; in apps such as Zello, assign it as the PTT button by pressing it when asked",
+    run: () => toggleTalk(false),
     // Function keys pass through screen readers' browse mode, unlike
     // letters and punctuation. (F7 is also Edge's Caret Browsing key; this
     // handler takes it first.)
     win: ['F7', (e) => plainKey(e, 'F7')],
     mac: ['F7 (Fn+F7 on most Mac keyboards)', (e) => plainKey(e, 'F7')],
+  },
+  {
+    id: 'talk-hold', what: "Hold the app's talk or record button down, like a phone's push-to-talk button: press once to start, again to stop",
+    run: () => toggleTalk(true),
+    win: ['Shift+F7', (e) => e.key === 'F7' && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey],
+    mac: ['Shift+F7 (Fn+Shift+F7 on most Mac keyboards)', (e) => e.key === 'F7' && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey],
   },
   {
     id: 'hold', what: 'Tap and hold (long press) the current item',
@@ -739,10 +781,11 @@ function currentNode() {
   return document.activeElement?.closest?.('#screen [data-id]') || null;
 }
 
-// Push-to-talk: F7 works like a phone's PTT button. It finds the app's
-// on-screen push-to-talk control and holds it down until the next F7; with no
-// such control it holds Android's hardware PTT key (F12) instead, which apps
-// such as Zello let you assign as their PTT button.
+// Talking: F7 finds the app's on-screen talk or record control and presses it
+// once (web pages and many apps use press-once buttons). Shift+F7 works like
+// a phone's PTT button instead, holding the control down until the next F7.
+// With no such control, both hold Android's hardware PTT key (F12), which
+// apps such as Zello let you assign as their PTT button.
 // Push-to-talk apps, then voice-message buttons (WhatsApp, Messenger), which
 // also record while held and send on release.
 const PTT_LABELS = [
@@ -774,7 +817,8 @@ function findPttControl() {
   return null;
 }
 
-function toggleTalk() {
+/** F7 presses the talk control once; Shift+F7 (hold) keeps it held down. */
+function toggleTalk(hold) {
   if (talking) {
     if (talking === 'key') invoke('ptt_key', { down: false });
     else invoke('release');
@@ -783,7 +827,10 @@ function toggleTalk() {
     return;
   }
   const control = mode === 'app' ? findPttControl() : null;
-  if (control) {
+  if (control && !hold) {
+    invoke('act', { id: control.id, action: 'click' });
+    announce(`Pressed ${control.label}`);
+  } else if (control) {
     invoke('act', { id: control.id, action: 'touchDown' });
     talking = 'touch';
     announce(`Talking, holding ${control.label}`);
@@ -799,11 +846,12 @@ function tapAndHold() {
   const app = document.activeElement?.closest?.('button[data-package]');
   if (app) {
     const pkg = app.dataset.package;
-    showActions(`${app.textContent}`, [
-      ['Open', () => launchApp(pkg)],
+    const actions = [['Open', () => launchApp(pkg)]];
+    if (app.dataset.web !== 'true') actions.push(
       ['App info', () => { lastScreen = { title: 'App info', nodes: [] }; invoke('app_info', { package: pkg }); }],
       ['Uninstall', () => { lastScreen = { title: 'Uninstall', nodes: [] }; invoke('uninstall', { package: pkg }); }],
-    ], app);
+    );
+    showActions(`${app.textContent}`, actions, app);
     return;
   }
   const node = currentNode();

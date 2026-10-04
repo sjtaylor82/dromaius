@@ -10,16 +10,18 @@ import { JSDOM } from 'jsdom';
 
 const ui = path.resolve(import.meta.dirname, '../ui');
 
-async function load({ mac = false } = {}) {
+async function load({ mac = false, delayText = false } = {}) {
   const html = fs.readFileSync(path.join(ui, 'index.html'), 'utf8').replace(/<script[^>]*><\/script>/, '');
   const dom = new JSDOM(html, { runScripts: 'outside-only', pretendToBeVisual: true });
   const w = dom.window;
   const calls = [];
   const handlers = {};
+  const textWaiters = [];
   w.__TAURI__ = {
     core: {
       invoke: async (cmd, args) => {
         calls.push([cmd, args === undefined ? undefined : JSON.parse(JSON.stringify(args))]);
+        if (cmd === 'set_text' && delayText) await new Promise((resolve) => textWaiters.push(resolve));
         if (cmd === 'init') {
           return { apps: [], screen: null, setup: null, about: null, state: { connected: true, status: 'Connected', mode: 'app' } };
         }
@@ -42,7 +44,7 @@ async function load({ mac = false } = {}) {
   await new Promise((r) => setTimeout(r, 20));
   const screen = (nodes, extra = {}) => handlers.screen({ payload: { title: 'Test', package: 'test', nodes, ...extra } });
   const el = (id) => w.document.querySelector(`#screen [data-id="${id}"]`);
-  return { w, doc: w.document, calls, screen, el, handlers };
+  return { w, doc: w.document, calls, screen, el, handlers, textWaiters };
 }
 
 test('an element whose role changes is replaced, leaving no stale ARIA', async () => {
@@ -240,7 +242,7 @@ test('phone and tablet choices show the current mode and apply the other one', a
   assert.equal(doc.activeElement, doc.querySelector('#main-menu summary'));
 });
 
-test('focus-mode arrows remain native inside Android edit fields', async () => {
+test('Down Arrow in a single-line edit opens Android suggestions', async () => {
   const { w, doc, calls, screen, el } = await load();
   screen([
     { id: 'e', kind: 'edit', label: 'Search', value: 'text' },
@@ -249,6 +251,7 @@ test('focus-mode arrows remain native inside Android edit fields', async () => {
   el('e').focus();
   el('e').dispatchEvent(new w.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
   assert.equal(doc.activeElement, el('e'));
+  assert.deepEqual(calls.at(-1), ['navigation_key', { key: 'DPAD_DOWN' }]);
   assert.equal(calls.filter(([cmd]) => cmd === 'scroll').length, 0);
 });
 
@@ -293,6 +296,27 @@ test('typing is not overwritten by late echoes, but app changes are shown', asyn
 
   screen([{ id: 'e', kind: 'edit', label: 'Search', value: 'abc@example.com' }]); // app autocompleted
   assert.equal(input.value, 'abc@example.com');
+});
+
+test('rapid text updates are delivered to Android in order', async () => {
+  const { w, screen, el, calls, textWaiters } = await load({ delayText: true });
+  screen([{ id: 'pin', kind: 'edit', label: 'Passcode', value: '', password: true }]);
+  const input = el('pin');
+  input.focus();
+
+  for (const value of ['1', '12', '123', '1234']) {
+    input.value = value;
+    input.setSelectionRange(value.length, value.length);
+    input.dispatchEvent(new w.Event('input', { bubbles: true }));
+  }
+  assert.deepEqual(calls.filter(([cmd]) => cmd === 'set_text').map(([, args]) => args.text), ['1']);
+
+  for (const expected of ['12', '123', '1234']) {
+    textWaiters.shift()();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(calls.filter(([cmd]) => cmd === 'set_text').at(-1)[1].text, expected);
+  }
+  textWaiters.shift()();
 });
 
 test('a new screen moves focus to its heading; a focus hint wins', async () => {
@@ -359,9 +383,16 @@ test('Windows shortcuts', async () => {
   assert.equal(press(w, { key: 'ArrowLeft', altKey: true }), true);
   assert.deepEqual(calls.at(-1), ['global', { action: 'back' }]);
   assert.equal(doc.getElementById('btn-back').title, 'Alt+Left');
+  // Ctrl+L goes to the Android app in front (a browser's address bar).
+  assert.equal(press(w, { key: 'l', code: 'KeyL', ctrlKey: true }), true);
+  assert.deepEqual(calls.at(-1), ['ctrl_key', { key: 'L' }]);
+  assert.equal(press(w, { key: 't', code: 'KeyT', ctrlKey: true }), true);
+  assert.deepEqual(calls.at(-1), ['ctrl_key', { key: 'T' }]);
   assert.equal(press(w, { key: 'h', code: 'KeyH', altKey: true }), true);
   assert.equal(doc.getElementById('btn-apps').title, 'Alt+H');
-  assert.match(doc.getElementById('shortcut-list').textContent, /Ctrl\+L/);
+  assert.match(doc.getElementById('shortcut-list').textContent, /Alt\+S/);
+  assert.equal(press(w, { key: 's', code: 'KeyS', altKey: true }), true);
+  assert.equal(press(w, { key: 'l', code: 'KeyL', ctrlKey: true }), false, 'not in Your apps');
 });
 
 test('Mac shortcuts follow Mac conventions and leave Option+arrows alone', async () => {
@@ -371,8 +402,12 @@ test('Mac shortcuts follow Mac conventions and leave Option+arrows alone', async
   const before = calls.length;
   assert.equal(press(w, { key: 'ArrowLeft', altKey: true }), false, 'Option+Left still moves by word');
   assert.equal(calls.length, before);
-  assert.equal(doc.getElementById('btn-install').title, 'Cmd+L');
+  assert.equal(doc.getElementById('btn-install').title, 'Option+S');
   assert.match(doc.getElementById('shortcut-list').textContent, /VoiceOver\+Shift\+M/);
+  // Option+S types a symbol on a Mac too; Cmd+L goes to the Android app.
+  assert.equal(press(w, { key: 'ß', code: 'KeyS', altKey: true }), true);
+  assert.equal(press(w, { key: 'l', code: 'KeyL', metaKey: true }), true);
+  assert.deepEqual(calls.at(-1), ['ctrl_key', { key: 'L' }]);
   // Option+Shift+H types a symbol on a Mac, so the key code is what matters.
   assert.equal(press(w, { key: '˙', code: 'KeyH', altKey: true }), true);
   assert.equal(doc.getElementById('btn-apps').title, 'Option+H');
@@ -415,7 +450,17 @@ test('F8 on an app in Your apps offers Open, App info and Uninstall', async () =
   assert.deepEqual(calls.at(-1), ['uninstall', { package: 'dinnerdeal.android.customer' }]);
 });
 
-test('F7 finds and holds the on-screen push-to-talk control', async () => {
+test('a web app in Your apps offers only Open', async () => {
+  const { w, doc, handlers } = await load();
+  handlers.apps({ payload: [{ package: 'com.facebook.orca', label: 'Messenger (opens in browser)', web: true }] });
+  const app = doc.querySelector('button[data-package]');
+  app.focus();
+  assert.equal(press(w, { key: 'F8' }), true);
+  const labels = [...doc.querySelectorAll('#actions-list button')].map((b) => b.textContent);
+  assert.deepEqual(labels, ['Open']);
+});
+
+test('Shift+F7 finds and holds the on-screen push-to-talk control', async () => {
   const { w, screen, calls } = await load();
   screen([
     { id: 'm', kind: 'button', label: 'Menu', clickable: true },
@@ -423,18 +468,28 @@ test('F7 finds and holds the on-screen push-to-talk control', async () => {
       { id: 'p', kind: 'button', label: 'Push to talk', clickable: true },
     ] },
   ]);
-  assert.equal(press(w, { key: 'F7' }), true);
+  assert.equal(press(w, { key: 'F7', shiftKey: true }), true);
   assert.deepEqual(calls.at(-1), ['act', { id: 'p', action: 'touchDown' }]);
+  // Either key lets go.
   press(w, { key: 'F7' });
   assert.deepEqual(calls.at(-1), ['release', undefined]);
 });
 
-test('F7 holds WhatsApp-style voice message buttons, even when not marked tappable', async () => {
+test('F7 presses the record button once; nothing is held', async () => {
+  const { w, screen, calls } = await load();
+  screen([{ id: 'v', kind: 'button', label: 'Voice clip', clickable: true }]);
+  press(w, { key: 'F7' });
+  assert.deepEqual(calls.at(-1), ['act', { id: 'v', action: 'click' }]);
+  press(w, { key: 'F7' });
+  assert.deepEqual(calls.at(-1), ['act', { id: 'v', action: 'click' }]);
+});
+
+test('Shift+F7 holds WhatsApp-style voice message buttons, even when not marked tappable', async () => {
   const { w, screen, calls } = await load();
   screen([
     { id: 'c', kind: 'button', label: 'Camera', clickable: true },
     { id: 'v', kind: 'image', label: 'Voice message' },
   ]);
-  press(w, { key: 'F7' });
+  press(w, { key: 'F7', shiftKey: true });
   assert.deepEqual(calls.at(-1), ['act', { id: 'v', action: 'touchDown' }]);
 });

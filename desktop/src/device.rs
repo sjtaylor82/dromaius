@@ -812,6 +812,27 @@ impl Device {
         .map(|_| ())
     }
 
+    /// Presses Ctrl plus a key in the app in front (browser shortcuts such as
+    /// Ctrl+L for the address bar).
+    pub fn ctrl_key(&self, key: &str) -> Result<()> {
+        adb(
+            &self.sdk,
+            Some(&self.serial),
+            &["shell", "input", "keycombination", "CTRL_LEFT", key],
+        )
+        .map(|_| ())
+    }
+
+    /// Sends one navigation key to the focused Android control.
+    pub fn navigation_key(&self, key: &str) -> Result<()> {
+        adb(
+            &self.sdk,
+            Some(&self.serial),
+            &["shell", "input", "keyevent", key],
+        )
+        .map(|_| ())
+    }
+
     /// Opens Android's settings page for an app (storage, permissions…).
     pub fn open_app_info(&self, package: &str) -> Result<()> {
         let data = format!("package:{package}");

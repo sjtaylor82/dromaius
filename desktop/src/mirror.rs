@@ -175,8 +175,13 @@ impl Builder {
     }
 
     fn walk(&mut self, n: &ANode, ctx: &Ctx, out: &mut Vec<u64>, order: &mut Vec<u64>) {
-        // Like TalkBack, skip what Android says the user cannot see.
+        // Like TalkBack, skip what Android says the user cannot see. Its
+        // children are still checked: web pages put visible content (overlays,
+        // search results) inside zero-height wrappers that count as invisible.
         if n.invisible {
+            for c in &n.children {
+                self.walk(c, ctx, out, order);
+            }
             return;
         }
         let own = own_text(n);
@@ -552,6 +557,28 @@ mod tests {
             1,
             "list container is the only top-level child"
         );
+    }
+
+    #[test]
+    fn visible_content_inside_an_invisible_wrapper_is_kept() {
+        // Messenger's web search results sit in a zero-height overlay wrapper.
+        let s = snapshot(
+            r#"{"width":1600,"height":2560,"windows":[{"id":5,"type":"application","layer":1,"focused":true,
+            "root":{"id":1,"cls":"android.view.View","bounds":[0,210,1600,2560],"children":[
+              {"id":2,"cls":"android.view.View","invisible":true,"clickable":true,"bounds":[0,210,1600,210],"children":[
+                {"id":3,"cls":"android.view.View","clickable":true,"text":"Caitlin","bounds":[141,379,649,474]},
+                {"id":4,"cls":"android.view.View","invisible":true,"clickable":true,"text":"Off screen","bounds":[141,2560,649,2560]}
+              ]}
+            ]}}]}"#,
+        );
+        let m = Model::from_snapshot(&s);
+        let w = m.nav_window().unwrap();
+        let labels: Vec<_> = w
+            .order
+            .iter()
+            .map(|id| m.nodes[id].label.as_str())
+            .collect();
+        assert_eq!(labels, ["Caitlin"]);
     }
 
     #[test]
