@@ -69,7 +69,12 @@ fn with_node(id: &str, f: impl FnOnce(u64)) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn init(core: State<Shared>) -> InitPayload {
+fn init(core: State<Shared>, window: tauri::WebviewWindow) -> InitPayload {
+    // WebView2 doesn't always take keyboard focus when the window opens,
+    // leaving screen reader users unable to navigate until they click in it.
+    let _ = window.set_focus();
+    let webview: &tauri::Webview = window.as_ref();
+    let _ = webview.set_focus();
     core.lock().unwrap().init_payload()
 }
 
