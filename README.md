@@ -36,8 +36,8 @@ Windows / macOS                                    Android Emulator (hidden)
 | Shift+F10 / Applications key | VoiceOver+Shift+M | More actions: long press, app-specific actions, expand |
 | F5 | Cmd+R | Refresh |
 | Alt+N | Option+N | Android notifications |
-| [ | [ | Push to talk: start, then stop (holds the current item, or presses F12 as a hardware PTT key) |
-| ] | ] | Tap and hold the current item |
+| F7 | Fn+F7 | Push to talk: start, then stop (holds the focused item, or presses F12 as a hardware PTT key) |
+| F8 | Fn+F8 | Tap and hold the focused item |
 | Alt+Page Down | Option+Page Down | Next screen of items in a long Android list |
 | Alt+Page Up | Option+Page Up | Previous screen of items in a long Android list |
 | F1 | Cmd+? | Keyboard help |

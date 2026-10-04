@@ -47,8 +47,9 @@ Alt+N                     Android notifications
 Alt+Page Down             Next screen of items in a long Android list
 Alt+Page Up               Previous screen of items in a long Android list
 F1                        Keyboard help
-[                         Push to talk: press to start, press again to stop
-]                         Tap and hold (long press) the current item
+F7                        Push to talk: press to start, press again to stop
+                          (Tab to the app's Talk button first)
+F8                        Tap and hold (long press) the current item
 
 Long lists show only what currently fits on Android's screen. Press Alt+Page
 Down or Alt+Page Up from anywhere on the screen to move through them. You can

@@ -704,14 +704,17 @@ const SHORTCUTS = [
   {
     id: 'talk', what: 'Push to talk: press once to start talking, again to stop',
     run: () => toggleTalk(),
-    win: ['[', (e) => plainKey(e, '[')],
-    mac: ['[', (e) => plainKey(e, '[')],
+    // Function keys pass through screen readers' browse mode, unlike
+    // letters and punctuation. (F7 is also Edge's Caret Browsing key; this
+    // handler takes it first.)
+    win: ['F7', (e) => plainKey(e, 'F7')],
+    mac: ['F7 (Fn+F7 on most Mac keyboards)', (e) => plainKey(e, 'F7')],
   },
   {
     id: 'hold', what: 'Tap and hold (long press) the current item',
     run: () => tapAndHold(),
-    win: [']', (e) => plainKey(e, ']')],
-    mac: [']', (e) => plainKey(e, ']')],
+    win: ['F8', (e) => plainKey(e, 'F8')],
+    mac: ['F8 (Fn+F8 on most Mac keyboards)', (e) => plainKey(e, 'F8')],
   },
   {
     id: 'help', what: 'Keyboard help', run: () => $('help-dialog').showModal(),
@@ -720,10 +723,9 @@ const SHORTCUTS = [
   },
 ];
 
-/** A bare key press outside edit fields (where it must type normally). */
+/** The key pressed on its own (no Ctrl, Alt, Cmd or Shift). */
 function plainKey(e, key) {
-  if (e.key !== key || e.ctrlKey || e.altKey || e.metaKey) return false;
-  return !e.target.closest?.('input, textarea, [contenteditable]');
+  return e.key === key && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey;
 }
 
 /** The mirrored Android item the user is on, if any. */
@@ -731,8 +733,8 @@ function currentNode() {
   return document.activeElement?.closest?.('#screen [data-id]') || null;
 }
 
-// Push-to-talk: [ holds a finger down on the current item (e.g. a Talk
-// button) until the next [. With no item, it presses the hardware PTT key
+// Push-to-talk: F7 holds a finger down on the current item (e.g. a Talk
+// button) until the next F7. With no item, it presses the hardware PTT key
 // (F12) instead, for apps that let you assign one.
 let talking = null;
 

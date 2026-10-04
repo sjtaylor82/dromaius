@@ -388,29 +388,24 @@ test('notifications are Alt+N on Windows and Option+N on a Mac', async () => {
   }
 });
 
-test('[ toggles push-to-talk on the current item; ] taps and holds', async () => {
+test('F7 toggles push-to-talk on the current item; F8 taps and holds', async () => {
   const { w, screen, el, calls } = await load();
   screen([{ id: 't', kind: 'button', label: 'Talk', clickable: true, longClickable: true }]);
   el('t').focus();
-  assert.equal(press(w, { key: '[' }), true);
+  assert.equal(press(w, { key: 'F7' }), true);
   assert.deepEqual(calls.at(-1), ['act', { id: 't', action: 'touchDown' }]);
-  assert.equal(press(w, { key: '[' }), true);
+  assert.equal(press(w, { key: 'F7' }), true);
   assert.deepEqual(calls.at(-1), ['release', undefined]);
-  assert.equal(press(w, { key: ']' }), true);
+  assert.equal(press(w, { key: 'F8' }), true);
   assert.deepEqual(calls.at(-1), ['act', { id: 't', action: 'longClick' }]);
 });
 
-test('[ with no item uses the PTT key; brackets still type in edit fields', async () => {
-  const { w, doc, screen, el, calls } = await load();
+test('F7 with no item uses the PTT key; brackets type normally', async () => {
+  const { w, doc, calls } = await load();
   doc.body.focus();
-  press(w, { key: '[' });
+  press(w, { key: 'F7' });
   assert.deepEqual(calls.at(-1), ['ptt_key', { down: true }]);
-  press(w, { key: '[' });
+  press(w, { key: 'F7' });
   assert.deepEqual(calls.at(-1), ['ptt_key', { down: false }]);
-
-  screen([{ id: 'e', kind: 'edit', label: 'Message', value: '' }]);
-  el('e').focus();
-  const e = new w.KeyboardEvent('keydown', { key: '[', bubbles: true, cancelable: true });
-  el('e').dispatchEvent(e);
-  assert.equal(e.defaultPrevented, false, 'typed into the field');
+  assert.equal(press(w, { key: '[' }), false);
 });
