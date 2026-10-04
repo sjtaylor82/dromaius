@@ -806,6 +806,44 @@ impl Device {
         .map(|_| ())
     }
 
+    /// Opens Android's settings page for an app (storage, permissions…).
+    pub fn open_app_info(&self, package: &str) -> Result<()> {
+        let data = format!("package:{package}");
+        adb(
+            &self.sdk,
+            Some(&self.serial),
+            &[
+                "shell",
+                "am",
+                "start",
+                "-a",
+                "android.settings.APPLICATION_DETAILS_SETTINGS",
+                "-d",
+                &data,
+            ],
+        )
+        .map(|_| ())
+    }
+
+    /// Asks Android to uninstall an app; Android shows its own confirmation.
+    pub fn request_uninstall(&self, package: &str) -> Result<()> {
+        let data = format!("package:{package}");
+        adb(
+            &self.sdk,
+            Some(&self.serial),
+            &[
+                "shell",
+                "am",
+                "start",
+                "-a",
+                "android.intent.action.DELETE",
+                "-d",
+                &data,
+            ],
+        )
+        .map(|_| ())
+    }
+
     /// Stops an app (it restarts the next time it's used).
     pub fn force_stop(&self, package: &str) -> Result<()> {
         adb(

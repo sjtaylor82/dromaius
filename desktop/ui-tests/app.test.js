@@ -400,3 +400,16 @@ test('F7 works like a PTT button whatever is focused; F8 taps and holds', async 
   assert.deepEqual(calls.at(-1), ['act', { id: 't', action: 'longClick' }]);
   assert.equal(press(w, { key: '[' }), false, 'brackets type normally');
 });
+
+test('F8 on an app in Your apps offers Open, App info and Uninstall', async () => {
+  const { w, doc, calls, handlers } = await load();
+  handlers.apps({ payload: [{ package: 'dinnerdeal.android.customer', label: 'EatClub' }] });
+  const app = doc.querySelector('button[data-package]');
+  app.focus();
+  assert.equal(press(w, { key: 'F8' }), true);
+  const labels = [...doc.querySelectorAll('#actions-list button')].map((b) => b.textContent);
+  assert.deepEqual(labels, ['Open', 'App info', 'Uninstall']);
+  assert.equal(doc.getElementById('actions-title').textContent, 'EatClub');
+  doc.querySelectorAll('#actions-list button')[2].click();
+  assert.deepEqual(calls.at(-1), ['uninstall', { package: 'dinnerdeal.android.customer' }]);
+});

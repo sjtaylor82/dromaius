@@ -808,6 +808,31 @@ impl Core {
         self.send(ToBridge::Apps);
     }
 
+    /// Opens Android's app info page or uninstall prompt for an app on Your apps.
+    pub fn app_screen(&mut self, package: &str, uninstall: bool) {
+        // Package names come from the page; only accept well-formed ones.
+        if device::package_from_link(package).as_deref() != Some(package) {
+            return;
+        }
+        let Some(d) = self.device.clone() else {
+            return self.announce("Not connected to Android");
+        };
+        self.launching = Some((String::new(), Instant::now(), None));
+        self.screen_key.clear();
+        self.set_mode(Mode::App);
+        let package = package.to_string();
+        std::thread::spawn(move || {
+            let result = if uninstall {
+                d.request_uninstall(&package)
+            } else {
+                d.open_app_info(&package)
+            };
+            if let Err(e) = result {
+                eprintln!("could not open the app screen: {e:#}");
+            }
+        });
+    }
+
     pub fn launch(&mut self, package: &str) {
         let label = self
             .apps

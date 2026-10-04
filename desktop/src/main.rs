@@ -74,6 +74,16 @@ fn init(core: State<Shared>) -> InitPayload {
 }
 
 #[tauri::command]
+fn app_info(core: State<Shared>, package: String) {
+    core.lock().unwrap().app_screen(&package, false);
+}
+
+#[tauri::command]
+fn uninstall(core: State<Shared>, package: String) {
+    core.lock().unwrap().app_screen(&package, true);
+}
+
+#[tauri::command]
 fn release(core: State<Shared>) {
     core.lock().unwrap().release();
 }
@@ -224,7 +234,9 @@ fn main() {
             answer_license,
             start_update,
             release,
-            ptt_key
+            ptt_key,
+            app_info,
+            uninstall
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dromaius");

@@ -452,12 +452,18 @@ function openActions(el) {
   if (d.expanded === false) actions.push(['Expand', () => invoke('act', { id: d.id, action: 'expand' })]);
   if (d.expanded === true) actions.push(['Collapse', () => invoke('act', { id: d.id, action: 'collapse' })]);
 
+  showActions(`Actions for ${d.label || 'this item'}`, actions, el);
+}
+
+/** Shows the actions dialog; `back` gets focus again after an action. */
+function showActions(title, actions, back) {
   if (actions.length === 0) {
     announce('No actions for this item');
     return;
   }
+  const el = back;
   const dialog = $('actions-dialog');
-  setText($('actions-title'), `Actions for ${d.label || 'this item'}`);
+  setText($('actions-title'), title);
   const ul = $('actions-list');
   ul.replaceChildren(...actions.map(([label, run]) => {
     const li = document.createElement('li');
@@ -745,6 +751,17 @@ function toggleTalk() {
 }
 
 function tapAndHold() {
+  // An app on Your apps: the menu a phone shows when you hold an app icon.
+  const app = document.activeElement?.closest?.('button[data-package]');
+  if (app) {
+    const pkg = app.dataset.package;
+    showActions(`${app.textContent}`, [
+      ['Open', () => launchApp(pkg)],
+      ['App info', () => { lastScreen = { title: 'App info', nodes: [] }; invoke('app_info', { package: pkg }); }],
+      ['Uninstall', () => { lastScreen = { title: 'Uninstall', nodes: [] }; invoke('uninstall', { package: pkg }); }],
+    ], app);
+    return;
+  }
   const node = currentNode();
   if (!node) {
     announce('Move to an item first');
