@@ -764,7 +764,7 @@ function tapAndHold() {
   }
   const node = currentNode();
   if (!node) {
-    announce('Move to an item first');
+    announce(IS_MAC ? 'Move to an item first' : 'Tab to an item first');
     return;
   }
   invoke('act', { id: node.dataset.id, action: 'longClick' });
