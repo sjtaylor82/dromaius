@@ -29,12 +29,24 @@ fn messenger_request(input: &str) -> bool {
 }
 
 fn apps_for_desktop(mut apps: Vec<AppInfo>) -> Vec<AppInfo> {
+    #[cfg(target_arch = "x86_64")]
+    for app in &mut apps {
+        if app.native_abi.starts_with("arm") {
+            let warning = if app.package == "com.poncho.eatclub" {
+                "unsupported on x64"
+            } else {
+                "ARM app; may not work on x64"
+            };
+            app.label = format!("{} ({warning})", app.label);
+        }
+    }
     #[cfg(target_os = "windows")]
     {
         apps.retain(|app| app.package != MESSENGER_PACKAGE);
         apps.push(AppInfo {
             package: MESSENGER_PACKAGE.into(),
             label: "Messenger (opens in browser)".into(),
+            native_abi: String::new(),
             web: true,
         });
         apps.sort_by_key(|app| app.label.to_ascii_lowercase());
@@ -1408,11 +1420,51 @@ mod tests {
         let apps = super::apps_for_desktop(vec![crate::protocol::AppInfo {
             package: "com.facebook.orca".into(),
             label: "Messenger".into(),
+            native_abi: "arm64".into(),
             web: false,
         }]);
         assert_eq!(apps.len(), 1);
         assert_eq!(apps[0].label, "Messenger (opens in browser)");
         assert!(apps[0].web);
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn warns_about_arm_apps_and_marks_broken_eatclub_unsupported() {
+        let apps = super::apps_for_desktop(vec![
+            crate::protocol::AppInfo {
+                package: "com.poncho.eatclub".into(),
+                label: "EatClub".into(),
+                native_abi: "arm64".into(),
+                web: false,
+            },
+            crate::protocol::AppInfo {
+                package: "example.arm".into(),
+                label: "Example".into(),
+                native_abi: "arm64".into(),
+                web: false,
+            },
+            crate::protocol::AppInfo {
+                package: "example.x64".into(),
+                label: "Native".into(),
+                native_abi: "x86_64".into(),
+                web: false,
+            },
+        ]);
+        let label = |package| {
+            apps.iter()
+                .find(|app| app.package == package)
+                .map(|app| app.label.as_str())
+        };
+        assert_eq!(
+            label("com.poncho.eatclub"),
+            Some("EatClub (unsupported on x64)")
+        );
+        assert_eq!(
+            label("example.arm"),
+            Some("Example (ARM app; may not work on x64)")
+        );
+        assert_eq!(label("example.x64"), Some("Native"));
     }
 
     #[test]

@@ -51,6 +51,9 @@ pub enum FromBridge {
 pub struct AppInfo {
     pub package: String,
     pub label: String,
+    /// The folder name Android selected for the app's native libraries.
+    #[serde(default, rename = "nativeAbi")]
+    pub native_abi: String,
     /// A desktop web app presented alongside the installed Android apps.
     #[serde(default)]
     pub web: bool,

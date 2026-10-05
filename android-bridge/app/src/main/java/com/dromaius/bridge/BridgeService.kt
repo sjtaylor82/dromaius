@@ -180,10 +180,24 @@ class BridgeService : AccessibilityService() {
         val apps = pm.queryIntentActivities(intent, 0)
             .filter { it.activityInfo.packageName != packageName }
             .distinctBy { it.activityInfo.packageName }
-            .map { it.activityInfo.packageName to it.loadLabel(pm).toString() }
+            .map {
+                Triple(
+                    it.activityInfo.packageName,
+                    it.loadLabel(pm).toString(),
+                    it.activityInfo.applicationInfo.nativeLibraryDir
+                        ?.substringAfterLast('/') ?: ""
+                )
+            }
             .sortedBy { it.second.lowercase() }
         val arr = JSONArray()
-        for ((pkg, label) in apps) arr.put(JSONObject().put("package", pkg).put("label", label))
+        for ((pkg, label, nativeAbi) in apps) {
+            arr.put(
+                JSONObject()
+                    .put("package", pkg)
+                    .put("label", label)
+                    .put("nativeAbi", nativeAbi)
+            )
+        }
         server?.send(JSONObject().put("type", "apps").put("apps", arr))
     }
 
