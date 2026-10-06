@@ -36,7 +36,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          gh release download --repo "${{ github.repository }}" --pattern dromaius-bridge.apk --dir "$env:RUNNER_TEMP"
+          $found = $false
+          $tags = gh release list --repo "${{ github.repository }}" --limit 100 --json tagName --jq '.[].tagName'
+          foreach ($tag in $tags) {
+            gh release download $tag --repo "${{ github.repository }}" --pattern dromaius-bridge.apk --dir "$env:RUNNER_TEMP" 2>$null
+            if ($LASTEXITCODE -eq 0) { $found = $true; break }
+          }
+          if (-not $found) { throw "No signed dromaius-bridge.apk was found in any release" }
           "DROMAIUS_EMBED_APK=$env:RUNNER_TEMP\dromaius-bridge.apk" >> $env:GITHUB_ENV
 
       - name: Build
@@ -89,7 +95,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download --repo "${{ github.repository }}" --pattern dromaius-bridge.apk --dir "$RUNNER_TEMP"
+          found=false
+          for tag in $(gh release list --repo "${{ github.repository }}" --limit 100 --json tagName --jq '.[].tagName'); do
+            if gh release download "$tag" --repo "${{ github.repository }}" --pattern dromaius-bridge.apk --dir "$RUNNER_TEMP" 2>/dev/null; then
+              found=true
+              break
+            fi
+          done
+          if [ "$found" != true ]; then echo "No signed dromaius-bridge.apk was found in any release" >&2; exit 1; fi
           echo "DROMAIUS_EMBED_APK=$RUNNER_TEMP/dromaius-bridge.apk" >> "$GITHUB_ENV"
 
       - name: Build the universal app
