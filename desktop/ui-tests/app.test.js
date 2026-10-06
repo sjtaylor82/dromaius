@@ -215,7 +215,7 @@ test('secondary commands are grouped behind the menu and it closes after use', a
   assert.ok(menu);
   assert.equal(menu.querySelector('summary').textContent, 'Menu');
   assert.deepEqual([...menu.querySelectorAll('button')].map((button) => button.textContent), [
-    'Apps', 'Notifications', 'Install from Google Play', 'Keyboard help',
+    'Apps', 'Notifications', 'Install from Google Play', 'Keyboard help', 'Check for Dromaius updates',
     'Phone mode, about 6 inches', 'Tablet mode, about 11 inches',
   ]);
   assert.equal(menu.querySelector('.menu-items').lastElementChild.id, 'status');
@@ -423,15 +423,14 @@ test('notifications are Alt+N on Windows and Option+N on a Mac', async () => {
   }
 });
 
-test('F7 works like a PTT button whatever is focused; F8 taps and holds', async () => {
+test('F7 holds the focused control until the next F7; F8 long-presses it', async () => {
   const { w, screen, el, calls } = await load();
   screen([{ id: 't', kind: 'button', label: 'Photo', clickable: true, longClickable: true }]);
   el('t').focus();
-  // No push-to-talk control on screen: the hardware PTT key.
   assert.equal(press(w, { key: 'F7' }), true);
-  assert.deepEqual(calls.at(-1), ['ptt_key', { down: true }]);
+  assert.deepEqual(calls.at(-1), ['act', { id: 't', action: 'touchDown' }]);
   assert.equal(press(w, { key: 'F7' }), true);
-  assert.deepEqual(calls.at(-1), ['ptt_key', { down: false }]);
+  assert.deepEqual(calls.at(-1), ['release', undefined]);
   assert.equal(press(w, { key: 'F8' }), true);
   assert.deepEqual(calls.at(-1), ['act', { id: 't', action: 'longClick' }]);
   assert.equal(press(w, { key: '[' }), false, 'brackets type normally');
@@ -460,36 +459,11 @@ test('a web app in Your apps offers only Open', async () => {
   assert.deepEqual(labels, ['Open']);
 });
 
-test('Shift+F7 finds and holds the on-screen push-to-talk control', async () => {
-  const { w, screen, calls } = await load();
-  screen([
-    { id: 'm', kind: 'button', label: 'Menu', clickable: true },
-    { id: 'l', kind: 'list', label: '', children: [
-      { id: 'p', kind: 'button', label: 'Push to talk', clickable: true },
-    ] },
-  ]);
-  assert.equal(press(w, { key: 'F7', shiftKey: true }), true);
-  assert.deepEqual(calls.at(-1), ['act', { id: 'p', action: 'touchDown' }]);
-  // Either key lets go.
-  press(w, { key: 'F7' });
-  assert.deepEqual(calls.at(-1), ['release', undefined]);
-});
-
-test('F7 presses the record button once; nothing is held', async () => {
-  const { w, screen, calls } = await load();
-  screen([{ id: 'v', kind: 'button', label: 'Voice clip', clickable: true }]);
-  press(w, { key: 'F7' });
-  assert.deepEqual(calls.at(-1), ['act', { id: 'v', action: 'click' }]);
-  press(w, { key: 'F7' });
-  assert.deepEqual(calls.at(-1), ['act', { id: 'v', action: 'click' }]);
-});
-
-test('Shift+F7 holds WhatsApp-style voice message buttons, even when not marked tappable', async () => {
-  const { w, screen, calls } = await load();
-  screen([
-    { id: 'c', kind: 'button', label: 'Camera', clickable: true },
-    { id: 'v', kind: 'image', label: 'Voice message' },
-  ]);
-  press(w, { key: 'F7', shiftKey: true });
-  assert.deepEqual(calls.at(-1), ['act', { id: 'v', action: 'touchDown' }]);
+test('Shift+F7 does nothing', async () => {
+  const { w, screen, el, calls } = await load();
+  screen([{ id: 'p', kind: 'button', label: 'Speak', clickable: true }]);
+  el('p').focus();
+  const before = calls.length;
+  assert.equal(press(w, { key: 'F7', shiftKey: true }), false);
+  assert.equal(calls.length, before);
 });

@@ -18,6 +18,7 @@
           <button type="button" id="btn-notifications" title="Alt+N">Notifications</button>
           <button type="button" id="btn-install" title="Alt+S">Install from Google Play</button>
           <button type="button" id="btn-help" title="F1">Keyboard help</button>
+          <button type="button" id="btn-check-update">Check for Dromaius updates</button>
           <button type="button" id="btn-phone-mode" disabled>Phone mode, about 6 inches</button>
           <button type="button" id="btn-tablet-mode" disabled>Tablet mode, about 11 inches</button>
           <p id="status">Starting Android</p>
@@ -101,6 +102,18 @@
       <div class="buttons">
         <button type="submit" value="confirm" id="update-confirm">Upgrade</button>
         <button type="submit" value="cancel">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="app-update-dialog" aria-labelledby="app-update-title">
+    <form method="dialog">
+      <h2 id="app-update-title">Dromaius update</h2>
+      <p id="app-update-text"></p>
+      <p id="app-update-status" role="status"></p>
+      <div class="buttons">
+        <button type="submit" value="install" id="app-update-install">Download and install</button>
+        <button type="submit" value="cancel">Later</button>
       </div>
     </form>
   </dialog>

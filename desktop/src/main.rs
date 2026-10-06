@@ -7,6 +7,7 @@ mod mirror;
 mod protocol;
 mod setup;
 mod timing;
+mod updater;
 mod view;
 
 use std::path::PathBuf;
@@ -102,11 +103,6 @@ fn uninstall(core: State<Shared>, package: String) {
 #[tauri::command]
 fn release(core: State<Shared>) {
     core.lock().unwrap().release();
-}
-
-#[tauri::command]
-fn ptt_key(core: State<Shared>, down: bool) {
-    core.lock().unwrap().ptt_key(down);
 }
 
 #[tauri::command]
@@ -213,6 +209,27 @@ fn install_link(core: State<Shared>, link: String) {
     core.lock().unwrap().install_link(&link);
 }
 
+#[tauri::command]
+async fn check_app_update() -> Result<Option<updater::UpdateInfo>, String> {
+    updater::check().await.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+async fn install_app_update(
+    app: tauri::AppHandle,
+    update: updater::UpdateInfo,
+) -> Result<(), String> {
+    updater::install(&app, &update)
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn quit_for_update(app: tauri::AppHandle, core: State<Shared>) {
+    core.lock().unwrap().on_exit();
+    app.exit(0);
+}
+
 fn main() {
     let opts = match parse_args() {
         Ok(o) => o,
@@ -271,11 +288,13 @@ fn main() {
             answer_license,
             start_update,
             release,
-            ptt_key,
             ctrl_key,
             navigation_key,
             app_info,
-            uninstall
+            uninstall,
+            check_app_update,
+            install_app_update,
+            quit_for_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dromaius");

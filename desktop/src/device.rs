@@ -800,18 +800,6 @@ impl Device {
         Ok(())
     }
 
-    /// Presses or releases the key used as a hardware push-to-talk button
-    /// (F12; apps such as Zello let you assign it).
-    pub fn ptt_key(&self, down: bool) -> Result<()> {
-        let event = format!("EV_KEY:KEY_F12:{}", u8::from(down));
-        adb(
-            &self.sdk,
-            Some(&self.serial),
-            &["emu", "event", "send", &event],
-        )
-        .map(|_| ())
-    }
-
     /// Presses Ctrl plus a key in the app in front (browser shortcuts such as
     /// Ctrl+L for the address bar).
     pub fn ctrl_key(&self, key: &str) -> Result<()> {

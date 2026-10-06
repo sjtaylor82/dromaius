@@ -38,8 +38,7 @@ Windows / macOS                                    Android Emulator (hidden)
 | Shift+F10 / Applications key | VoiceOver+Shift+M | More actions: long press, app-specific actions, expand |
 | F5 | Cmd+R | Refresh |
 | Alt+N | Option+N | Android notifications |
-| F7 | Fn+F7 | Talk: presses the app's on-screen talk or record button once (or, without one, holds Android key F12 as a hardware PTT key until pressed again) |
-| Shift+F7 | Fn+Shift+F7 | Push to talk: holds the app's on-screen talk or record button until pressed again |
+| F7 | Fn+F7 | Push to talk: holds the focused Android control down until F7 is pressed again |
 | F8 | Fn+F8 | Tap and hold the focused item |
 | Alt+Page Down | Option+Page Down | Next screen of items in a long Android list |
 | Alt+Page Up | Option+Page Up | Previous screen of items in a long Android list |
@@ -128,6 +127,12 @@ but not notarized, so users open it once via Open in Finder's menu
 (see `dist/README-mac.txt`). The workflow embeds the signed bridge from the
 latest GitHub release, so the signing key stays off GitHub; publish the
 release's `dromaius-bridge.apk` asset whenever the bridge changes.
+
+Dromaius checks GitHub releases quietly at startup. After confirmation,
+Windows updates are downloaded, verified against the release's SHA-256
+checksum, installed after Dromaius exits, and restarted. On macOS the update
+prompt opens the matching release page. Use **Check for Dromaius updates** in
+the main menu to check manually.
 
 For repeated testing from a folder shared with a Mac, use
 `bash mac-test/run.sh`. It builds the current source locally instead of

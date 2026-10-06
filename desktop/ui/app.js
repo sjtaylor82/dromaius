@@ -744,19 +744,13 @@ const SHORTCUTS = [
     mac: ['Cmd+R', (e) => e.metaKey && !e.shiftKey && e.key.toLowerCase() === 'r'],
   },
   {
-    id: 'talk', what: "Press the app's talk or record button once. With no such button on screen it holds the PTT key until pressed again; in apps such as Zello, assign it as the PTT button by pressing it when asked",
-    run: () => toggleTalk(false),
+    id: 'talk', what: "Hold the focused Android control down; press again to release it",
+    run: () => toggleTalk(),
     // Function keys pass through screen readers' browse mode, unlike
     // letters and punctuation. (F7 is also Edge's Caret Browsing key; this
     // handler takes it first.)
     win: ['F7', (e) => plainKey(e, 'F7')],
     mac: ['F7 (Fn+F7 on most Mac keyboards)', (e) => plainKey(e, 'F7')],
-  },
-  {
-    id: 'talk-hold', what: "Hold the app's talk or record button down, like a phone's push-to-talk button: press once to start, again to stop",
-    run: () => toggleTalk(true),
-    win: ['Shift+F7', (e) => e.key === 'F7' && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey],
-    mac: ['Shift+F7 (Fn+Shift+F7 on most Mac keyboards)', (e) => e.key === 'F7' && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey],
   },
   {
     id: 'hold', what: 'Tap and hold (long press) the current item',
@@ -781,64 +775,24 @@ function currentNode() {
   return document.activeElement?.closest?.('#screen [data-id]') || null;
 }
 
-// Talking: F7 finds the app's on-screen talk or record control and presses it
-// once (web pages and many apps use press-once buttons). Shift+F7 works like
-// a phone's PTT button instead, holding the control down until the next F7.
-// With no such control, both hold Android's hardware PTT key (F12), which
-// apps such as Zello let you assign as their PTT button.
-// Push-to-talk apps, then voice-message buttons (WhatsApp, Messenger), which
-// also record while held and send on release.
-const PTT_LABELS = [
-  /push[\s-]*to[\s-]*talk/i, /hold[\s-]*to[\s-]*talk/i, /ptt/i, /^talk$/i,
-  /hold[\s-]*to[\s-]*record/i, /voice[\s-]*message/i, /voice[\s-]*clip/i, /voice[\s-]*note/i,
-  /talk/i, /transmit/i, /record[\s-]*(audio|voice)/i,
-];
 let talking = null;
 
-/** The best push-to-talk control on the current screen, if any. */
-function findPttControl() {
-  // Prefer controls marked tappable, but record buttons are often custom
-  // views that only react to touch, so consider everything as a fallback.
-  const all = [];
-  const walk = (nodes) => {
-    for (const n of nodes || []) {
-      all.push(n);
-      walk(n.children);
-    }
-  };
-  walk(lastScreen?.nodes);
-  const tappable = all.filter((n) => n.clickable || n.longClickable);
-  for (const pool of [tappable, all]) {
-    for (const pattern of PTT_LABELS) {
-      const hit = pool.find((n) => pattern.test(n.label || ''));
-      if (hit) return hit;
-    }
-  }
-  return null;
-}
-
-/** F7 presses the talk control once; Shift+F7 (hold) keeps it held down. */
-function toggleTalk(hold) {
+/** F7 holds the focused Android control down; the next F7 releases it. */
+function toggleTalk() {
   if (talking) {
-    if (talking === 'key') invoke('ptt_key', { down: false });
-    else invoke('release');
+    invoke('release');
     talking = null;
     announce('Stopped talking');
     return;
   }
-  const control = mode === 'app' ? findPttControl() : null;
-  if (control && !hold) {
-    invoke('act', { id: control.id, action: 'click' });
-    announce(`Pressed ${control.label}`);
-  } else if (control) {
-    invoke('act', { id: control.id, action: 'touchDown' });
-    talking = 'touch';
-    announce(`Talking, holding ${control.label}`);
-  } else {
-    invoke('ptt_key', { down: true });
-    talking = 'key';
-    announce('Talking, using the PTT key');
+  const control = mode === 'app' ? currentNode()?._desc : null;
+  if (!control) {
+    announce(IS_MAC ? 'Move to a control first' : 'Tab to a control first');
+    return;
   }
+  invoke('act', { id: control.id, action: 'touchDown' });
+  talking = true;
+  announce(`Talking, holding ${control.label || 'the focused control'}`);
 }
 
 function tapAndHold() {
@@ -908,6 +862,50 @@ $('btn-help').addEventListener('click', () => $('help-dialog').showModal());
 for (const id of ['btn-apps', 'btn-notifications', 'btn-install', 'btn-help']) {
   $(id).addEventListener('click', () => { $('main-menu').open = false; });
 }
+
+let availableAppUpdate = null;
+let checkingAppUpdate = false;
+
+async function checkAppUpdate(manual = false) {
+  if (checkingAppUpdate) return;
+  checkingAppUpdate = true;
+  if (manual) announce('Checking for Dromaius updates');
+  try {
+    const update = await invoke('check_app_update');
+    if (!update) {
+      if (manual) announce('Dromaius is up to date');
+      return;
+    }
+    availableAppUpdate = update;
+    setText($('app-update-text'), `Dromaius ${update.version} is available. Your Android apps and data will be preserved.`);
+    setText($('app-update-status'), '');
+    $('app-update-install').disabled = false;
+    $('app-update-dialog').returnValue = '';
+    $('app-update-dialog').showModal();
+  } catch (error) {
+    if (manual) announce(`Could not check for updates: ${error}`);
+  } finally {
+    checkingAppUpdate = false;
+  }
+}
+
+$('btn-check-update').addEventListener('click', () => {
+  $('main-menu').open = false;
+  checkAppUpdate(true);
+});
+
+$('app-update-dialog').addEventListener('close', async () => {
+  if ($('app-update-dialog').returnValue !== 'install' || !availableAppUpdate) return;
+  $('app-update-dialog').showModal();
+  $('app-update-install').disabled = true;
+  setText($('app-update-status'), 'Downloading and verifying the update');
+  try {
+    await invoke('install_app_update', { update: availableAppUpdate });
+  } catch (error) {
+    setText($('app-update-status'), `The update could not be installed: ${error}`);
+    $('app-update-install').disabled = false;
+  }
+});
 
 let displayModeLoaded = false;
 
@@ -1107,6 +1105,11 @@ async function start() {
   await listen('screen', (e) => renderScreen(e.payload));
   await listen('setup', (e) => renderSetup(e.payload));
   await listen('about', (e) => renderAbout(e.payload));
+  await listen('app-update-status', (e) => setText($('app-update-status'), e.payload));
+  await listen('app-update-ready', () => {
+    setText($('app-update-status'), 'Restarting to finish the update');
+    invoke('quit_for_update');
+  });
   const init = await tauri.core.invoke('init');
   if (init.setup) renderSetup(init.setup);
   if (init.about) renderAbout(init.about);
@@ -1115,6 +1118,7 @@ async function start() {
   applyState(init.state);
   updateTitle();
   currentHeading()?.focus();
+  checkAppUpdate(false);
 }
 
 start();

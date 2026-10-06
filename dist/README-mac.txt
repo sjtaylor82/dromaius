@@ -67,10 +67,8 @@ Option+N            Android notifications (new ones are also announced)
 Option+Page Down    Next screen of items in a long Android list
 Option+Page Up      Previous screen of items in a long Android list
 Cmd+?               Keyboard help
-Fn+F7               Talk: presses an on-screen talk or record button once;
-                    without one, toggles the hardware PTT key.
-Fn+Shift+F7         Push to talk: holds the on-screen talk or record button
-                    until pressed again.
+Fn+F7               Push to talk: holds the focused Android control down
+                    until Fn+F7 is pressed again.
 Fn+F8               Tap and hold (long press) the current item
 
 In edit fields, interact with the field and type. Return in a search field

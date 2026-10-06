@@ -760,19 +760,6 @@ impl Core {
         self.send(ToBridge::Release);
     }
 
-    /// Presses (down) or releases the hardware push-to-talk key, for apps
-    /// that let you assign a PTT button.
-    pub fn ptt_key(&mut self, down: bool) {
-        let Some(d) = self.device.clone() else {
-            return self.announce("Not connected to Android");
-        };
-        std::thread::spawn(move || {
-            if let Err(e) = d.ptt_key(down) {
-                eprintln!("push-to-talk key failed: {e:#}");
-            }
-        });
-    }
-
     /// Sends a browser shortcut (Ctrl+L, Ctrl+T) to the app in front.
     pub fn ctrl_key(&mut self, key: &str) {
         if !["L", "T"].contains(&key) {

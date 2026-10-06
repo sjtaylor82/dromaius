@@ -55,17 +55,19 @@ jobs:
           $loader = Get-ChildItem desktop/target/release -Recurse -Filter WebView2Loader.dll | Select-Object -First 1
           if ($loader) { Copy-Item $loader.FullName $folder }
           Compress-Archive -Path $folder -DestinationPath "out/Dromaius-$version-windows-x64.zip"
+          $hash = (Get-FileHash "out/Dromaius-$version-windows-x64.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash *Dromaius-$version-windows-x64.zip" | Set-Content out/SHA256SUMS-windows.txt -Encoding ascii
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dromaius-windows-x64
-          path: out/*.zip
+          path: out/*
 
       - name: Attach to the release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$env:GITHUB_REF_NAME" out/*.zip --clobber --repo "${{ github.repository }}"
+        run: gh release upload "$env:GITHUB_REF_NAME" out/* --clobber --repo "${{ github.repository }}"
 
   macos:
     runs-on: macos-latest
@@ -103,15 +105,16 @@ jobs:
           cp dist/install-macos.sh dist/collect-macos-logs.sh out/Dromaius/
           chmod +x out/Dromaius/*.sh
           (cd out && ditto -c -k --keepParent Dromaius "Dromaius-$VERSION-macos-universal.zip")
+          (cd out && shasum -a 256 "Dromaius-$VERSION-macos-universal.zip" > SHA256SUMS-macos.txt)
           ls -la out
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dromaius-macos
-          path: out/*.zip
+          path: out/*
 
       - name: Attach to the release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" out/*.zip --clobber --repo "${{ github.repository }}"
+        run: gh release upload "$GITHUB_REF_NAME" out/* --clobber --repo "${{ github.repository }}"

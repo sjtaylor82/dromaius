@@ -1,4 +1,4 @@
-DROMAIUS 0.1.2
+DROMAIUS 0.1.3
 
 Use Android apps on Windows or macOS with your screen reader and keyboard.
 
@@ -57,10 +57,8 @@ Alt+N                     Android notifications
 Alt+Page Down             Next screen of items in a long Android list
 Alt+Page Up               Previous screen of items in a long Android list
 F1                        Keyboard help
-F7                        Talk: presses an on-screen talk or record button
-                          once; without one, toggles the hardware PTT key.
-Shift+F7                  Push to talk: holds the on-screen talk or record
-                          button until pressed again.
+F7                        Push to talk: holds the focused Android control
+                          down until F7 is pressed again.
 F8                        Tap and hold (long press) the current item
 
 Long lists show only what currently fits on Android's screen. Press Alt+Page
@@ -121,10 +119,8 @@ Option+N                  Android notifications
 Option+Page Down          Next screen of items in a long Android list
 Option+Page Up            Previous screen of items in a long Android list
 Cmd+?                     Keyboard help
-Fn+F7                     Talk: presses an on-screen talk or record button
-                          once; without one, toggles the hardware PTT key.
-Fn+Shift+F7               Push to talk: holds the on-screen talk or record
-                          button until pressed again.
+Fn+F7                     Push to talk: holds the focused Android control
+                          down until Fn+F7 is pressed again.
 Fn+F8                     Tap and hold (long press) the current item
 
 In edit fields, interact with the field and type. Return in a search field
