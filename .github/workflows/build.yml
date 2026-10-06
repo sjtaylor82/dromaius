@@ -73,7 +73,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$env:GITHUB_REF_NAME" out/* --clobber --repo "${{ github.repository }}"
+        run: gh release upload "$env:GITHUB_REF_NAME" out/*.zip out/SHA256SUMS-windows.txt --clobber --repo "${{ github.repository }}"
 
   macos:
     runs-on: macos-latest
@@ -130,4 +130,4 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$GITHUB_REF_NAME" out/* --clobber --repo "${{ github.repository }}"
+        run: gh release upload "$GITHUB_REF_NAME" out/*.zip out/SHA256SUMS-macos.txt --clobber --repo "${{ github.repository }}"
